@@ -1,6 +1,8 @@
-# Eval config (stub) — replace PLACEHOLDER weights under checkpoints/taic/semantic/
+# Codec test config for TAIC / semantic
+# Place real weights at checkpoint path (replace PLACEHOLDER).
 task: "semantic"
 dataset_path: "/data/coco2017"
+split: "val2017"
 quality_level: 1
 lmbda: 0.0035
 checkpoint: "./checkpoints/taic/semantic/1/checkpoint_best_loss.pth.tar"
@@ -9,3 +11,4 @@ gpu_id: 0
 cuda: true
 test_batch_size: 1
 num_workers: 4
+pretrained_backbone: true

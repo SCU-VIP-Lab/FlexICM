@@ -122,7 +122,9 @@ FlexICM/
 ├── scripts/
 │   ├── download_base_codecs.sh
 │   ├── train_taic.py
-│   └── train_ctaic.py
+│   ├── train_ctaic.py
+│   ├── eval_taic.py            # codec test (bpp / feature D)
+│   └── eval_ctaic.py           # codec test for C-TAIC
 ├── flexicm/
 │   ├── models/                 # TAIC / C-TAIC / SFMA / TaskConnector / Conditional
 │   ├── layers/                 # RSTB / WindowAttention (same lineage as AdaptiveICMH)
@@ -133,8 +135,7 @@ FlexICM/
                                 # see checkpoints/README.md
 ```
 
-Eval configs (stub until full metrics are implemented): `configs/eval/`.
-Eval entry points: `scripts/eval_taic.py`, `scripts/eval_ctaic.py` (currently only check that real checkpoints replaced `PLACEHOLDER` files).
+Eval / codec-test configs: `configs/eval/`.
 
 ---
 
@@ -292,6 +293,53 @@ stage1_checkpoint:     # Stage-1 result loaded in Stage 2
 
 ---
 
+## Codec Test
+
+
+For C-TAIC, reported `bpp` is **extension-layer only** (base-layer rate is excluded), matching the paper.
+
+### Prepare checkpoints
+
+1. Train models (or copy trained weights) into the `checkpoints/` tree — Download checkpoints.
+2. Edit `dataset_path` / `gpu_id` in `configs/eval/*.yaml`
+
+### Test TAIC (five tasks)
+
+```bash
+python scripts/eval_taic.py -c configs/eval/taic_detection.yaml
+python scripts/eval_taic.py -c configs/eval/taic_semantic.yaml
+python scripts/eval_taic.py -c configs/eval/taic_instance.yaml
+python scripts/eval_taic.py -c configs/eval/taic_panoptic.yaml
+python scripts/eval_taic.py -c configs/eval/taic_pose.yaml
+
+# optional: also measure actual entropy-coded bitstream bpp
+python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --actual-bpp
+
+# optional: smoke test on a few batches
+python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --max-batches 10
+```
+
+Results JSON is written under `logs/eval_taic/<task>/<quality>/`.
+
+### Test C-TAIC (three scenarios)
+
+```bash
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s2.yaml
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s3.yaml
+
+# disable base-layer conditioning (TAIC-mode / graceful degradation)
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --no-condition
+
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --actual-bpp
+```
+
+Results JSON is written under `logs/eval_ctaic/<scenario>/<quality>/`.
+
+> Task rate–accuracy curves (mAP / mIoU / PQ / OKS vs bpp) are **not** included yet.
+
+---
+
 ## Code Map to the Paper
 
 | Paper component | Code location |
@@ -306,11 +354,3 @@ stage1_checkpoint:     # Stage-1 result loaded in Stage 2
 | Five teachers | `flexicm/tasks/__init__.py` |
 
 
----
-
-## Citation
-
-If you use this code or the paper, please cite FlexICM and acknowledge the base works:
-
-- TIC: Lu et al., Transformer-based Image Compression
-- TransTIC / AdaptiveICMH: task-adaptive SFMA tuning

@@ -60,5 +60,13 @@ cp logs/ctaic_s1_stage2/1/checkpoint_best_loss.pth.tar \
 ## Eval configs
 
 See `configs/eval/` — they point to these placeholder paths.
-Eval scripts will refuse to run if a `PLACEHOLDER` file is still present
-or if the `.pth.tar` is missing.
+
+Codec test (bpp / feature distortion):
+
+```bash
+python scripts/eval_taic.py -c configs/eval/taic_detection.yaml
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml
+```
+
+Scripts refuse to run if a `PLACEHOLDER` file is still present or if the `.pth.tar` is missing.
+Task rate–accuracy metrics are not implemented in these scripts yet.
