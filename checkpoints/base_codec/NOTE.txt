@@ -1,0 +1,2 @@
+Legacy config paths used ./checkpoints/base_codec_k.pth.tar.
+Prefer checkpoints/base_codec/base_codec_k.pth.tar after download.

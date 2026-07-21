@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.DS_Store
+logs/
+*.log
+coco_log/
+.ipynb_checkpoints/
+_figs/
+_paper_extract.txt
+
+# paper PDF — do not upload
+FlexICM.pdf
+*.pdf
+
+# real weights (keep PLACEHOLDER text files and README)
+checkpoints/**/*.pth.tar
+checkpoints/**/*.tar
+checkpoints/**/*.pkl
+checkpoints/**/*.pth
+!checkpoints/**/PLACEHOLDER*
+!checkpoints/**/*.txt
+!checkpoints/README.md

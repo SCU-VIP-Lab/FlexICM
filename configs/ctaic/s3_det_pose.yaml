@@ -1,0 +1,24 @@
+# Scenario s3: Object Detection (base) + Pose Estimation (extension)
+root: "logs"
+exp_name: "ctaic_s3"
+scenario: "s3"
+dataset_path: "/data/coco2017"
+base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
+base_taic_checkpoint: "./checkpoints/taic/detection/1/checkpoint_best_loss.pth.tar"
+taic_init: "./checkpoints/taic/pose/1/checkpoint_best_loss.pth.tar"
+stage1_checkpoint: "./checkpoints/ctaic/s3_det_pose/stage1/1/checkpoint_best_loss.pth.tar"
+epochs: 40
+learning_rate: 1.0e-4
+gpu_id: 0
+quality_level: 1
+lmbda: 0.0035
+num_workers: 8
+batch_size: 40
+test_batch_size: 1
+patch_size: 256
+cuda: true
+save: true
+seed: 42
+pretrained_backbone: true
+out_channels: 32
+align_mode: "stages"

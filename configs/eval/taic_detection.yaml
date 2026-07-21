@@ -1,0 +1,11 @@
+# Eval config (stub) — replace PLACEHOLDER weights under checkpoints/taic/detection/
+task: "detection"
+dataset_path: "/data/coco2017"
+quality_level: 1
+lmbda: 0.0035
+checkpoint: "./checkpoints/taic/detection/1/checkpoint_best_loss.pth.tar"
+base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
+gpu_id: 0
+cuda: true
+test_batch_size: 1
+num_workers: 4

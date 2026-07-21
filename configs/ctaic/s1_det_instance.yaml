@@ -1,0 +1,24 @@
+# Scenario s1: Object Detection (base) + Instance Segmentation (extension)
+root: "logs"
+exp_name: "ctaic_s1"
+scenario: "s1"
+dataset_path: "/data/coco2017"
+base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
+# trained base-layer TAIC for detection (provides y_b_hat)
+base_taic_checkpoint: "./checkpoints/taic/detection/1/checkpoint_best_loss.pth.tar"
+# optional TAIC init for extension task
+taic_init: "./checkpoints/taic/instance/1/checkpoint_best_loss.pth.tar"
+stage1_checkpoint: "./checkpoints/ctaic/s1_det_instance/stage1/1/checkpoint_best_loss.pth.tar"
+epochs: 40
+learning_rate: 1.0e-4
+gpu_id: 0
+quality_level: 1
+lmbda: 0.0035
+num_workers: 8
+batch_size: 40
+test_batch_size: 1
+patch_size: 256
+cuda: true
+save: true
+seed: 42
+pretrained_backbone: true
