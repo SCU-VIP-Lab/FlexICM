@@ -1,4 +1,4 @@
-# FlexICM TAIC - Object Detection (Faster R-CNN + Swin-B)
+# FlexICM TAIC - Object Detection (Cascade Mask R-CNN + Swin-B)
 root: "logs"
 exp_name: "taic_detection"
 task: "detection"

@@ -5,35 +5,45 @@ Official codebase for the paper **FlexICM: A Flexible Image Coding for Machines 
 Built on the **TIC (Transformer-based Image Compression)** base codec, this repository implements:
 
 - **TAIC (Base Layer)**: five single-task codecs that decode task intermediate features `h` **without** full image reconstruction
-- **C-TAIC (Extension Layer)**: three multi-task scenarios that condition on the base-layer latent \(\hat{y}_b\) via cross-attention
+- **C-TAIC (Extension Layer)**: three multi-task scenarios that condition on the base-layer latent \hat{y}_b via cross-attention
 
 ## Five Tasks and Three Scenarios
 
 ### TAIC (five task codecs)
 
-| Task | Teacher / Task Network | Feature Alignment | Metric |
-|------|------------------------|-------------------|--------|
-| Object Detection | Faster R-CNN + **Swin-B** | FPN `P2..P6` (Eq. 2) | mAP-bbox |
-| Semantic Segmentation | UPerNet + **Swin-B** | FPN `P2..P6` | mIoU |
-| Instance Segmentation | Mask R-CNN + **Swin-B** | FPN `P2..P6` | mAP-mask |
-| Panoptic Segmentation | MaskFormer + **Swin-B** | Stages `F1..F4` (Eq. 3) | PQ |
-| Pose Estimation | **HigherHRNet** | Stages `F1..F4` | mAP-OKS |
+
+| Task                  | Teacher / Task Network          | Feature Alignment       | Metric   |
+| --------------------- | ------------------------------- | ----------------------- | -------- |
+| Object Detection      | Faster R-CNN + **Swin-B**       | FPN `P2..P6` (Eq. 2)    | mAP-bbox |
+| Semantic Segmentation | UPerNet + **Swin-B**            | FPN `P2..P6`            | mIoU     |
+| Instance Segmentation | Cascade Mask R-CNN + **Swin-B** | FPN `P2..P6`            | mAP-mask |
+| Panoptic Segmentation | MaskFormer + **Swin-B**         | Stages `F1..F4` (Eq. 3) | PQ       |
+| Pose Estimation       | **HigherHRNet**                 | Stages `F1..F4`         | mAP-OKS  |
+
+
+
 
 ### C-TAIC (three scenarios)
 
-| Scenario | Base Layer | Extension Layer |
-|----------|------------|-----------------|
-| **s1** | Object Detection | Instance Segmentation |
-| **s2** | Semantic Segmentation | Panoptic Segmentation |
-| **s3** | Object Detection | Pose Estimation |
+
+| Scenario | Base Layer            | Extension Layer       |
+| -------- | --------------------- | --------------------- |
+| **s1**   | Object Detection      | Instance Segmentation |
+| **s2**   | Semantic Segmentation | Panoptic Segmentation |
+| **s3**   | Object Detection      | Pose Estimation       |
+
 
 ---
+
+
 
 ## Environment Setup
 
 > **Important:** Codec training **requires** task networks (teachers) to be available.
-> The loss \(D\) is computed from frozen teacher features, so you cannot train TAIC / C-TAIC
+> The loss D is computed from frozen teacher features, so you cannot train TAIC / C-TAIC
 > with only the codec packages. Install the teacher stack in **Task networks (teachers)** before the first training run.
+
+
 
 ### Recommended environment
 
@@ -48,13 +58,19 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
 pip install -r requirements.txt
 ```
 
+
+
 ### Core codec dependencies
 
-| Package | Role |
-|---------|------|
-| `compressai` | EntropyBottleneck / GaussianConditional / conv-deconv |
-| `timm` | **Required** Swin-B teacher backbone for feature alignment |
-| `PyYAML` | Training configs |
+
+| Package      | Role                                                       |
+| ------------ | ---------------------------------------------------------- |
+| `compressai` | EntropyBottleneck / GaussianConditional / conv-deconv      |
+| `timm`       | **Required** Swin-B teacher backbone for feature alignment |
+| `PyYAML`     | Training configs                                           |
+
+
+
 
 ### Task networks (teachers) — **required before training**
 
@@ -62,22 +78,25 @@ Teachers are already implemented in `flexicm/tasks/` and are constructed automat
 `scripts/train_taic.py` / `scripts/train_ctaic.py` via `build_teacher(...)`.
 You still must install their runtime dependencies and allow pretrained weights to download.
 
-| Task | Teacher used in training | What you need installed |
-|------|--------------------------|-------------------------|
-| Detection / Instance / Semantic / Panoptic | Swin-B backbone (+ FPN or stages) via `timm` | `timm` (from `requirements.txt`); first run downloads ImageNet-pretrained Swin-B |
-| Pose | HigherHRNet-style HRNet stem (original HRNet, not Swin) | Implemented in-repo; no extra package beyond PyTorch |
+
+| Task                 | Teacher used in training                                                     | What you need installed                              |
+| -------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Detection / Instance | Swin-B (`timm`) for FPN alignment; metric head = Cascade Mask R-CNN + Swin-B | `timm`; ImageNet Swin-B on first run                 |
+| Semantic / Panoptic  | Swin-B (`timm`)                                                              | `timm`; ImageNet Swin-B on first run                 |
+| Pose                 | HigherHRNet-style HRNet stem (original HRNet, not Swin)                      | Implemented in-repo; no extra package beyond PyTorch |
+
 
 Checklist before training:
 
 1. `pip install -r requirements.txt` (includes `timm`)
-2. Machine can reach the internet **or** you have cached `timm` Swin-B weights (for the four Swin tasks)
+2. Machine can reach the internet **or** you have cached `timm` Swin weights
 3. Verify teachers import cleanly:
 
 ```bash
 python -c "from flexicm.tasks import build_teacher; build_teacher('detection'); print('teachers ok')"
 ```
 
-Without a working teacher, training will fail when computing the feature-alignment term \(D\).
+Without a working teacher, training will fail when computing the feature-alignment term D.
 
 ### Task heads for metric evaluation
 
@@ -87,12 +106,13 @@ To evaluate paper metrics (mAP / mIoU / PQ / OKS) with full task heads, also ins
 pip install -U openmim
 mim install mmengine mmcv
 mim install mmdet mmsegmentation mmpose
-# or Detectron2 (alternative for detection / instance evaluation)
 ```
 
-Recommended official weights (same model families as the paper):
+Official detection / instance weights from
+[Swin-Transformer-Object-Detection](https://github.com/SwinTransformer/Swin-Transformer-Object-Detection)
+(see `configs/task_networks/README.md`):
 
-- **Faster / Mask R-CNN + Swin-B**: MMDetection Model Zoo
+- **Cascade Mask R-CNN + Swin-B** (detection mAP-bbox **and** instance mAP-mask; same weights)
 - **UPerNet + Swin-B**: MMSegmentation Model Zoo
 - **MaskFormer + Swin-B**: MMDetection / Mask2Former
 - **HigherHRNet**: MMPose Model Zoo (**HRNet backbone**)
@@ -100,6 +120,8 @@ Recommended official weights (same model families as the paper):
 These full heads are **not** required to start codec training; they are for final rate–accuracy evaluation.
 
 ---
+
+
 
 ## Repository Layout
 
@@ -139,7 +161,11 @@ Eval / codec-test configs: `configs/eval/`.
 
 ---
 
+
+
 ## Dataset Preparation
+
+
 
 ### COCO-2017 (detection / instance / semantic / panoptic)
 
@@ -175,6 +201,8 @@ Set in the corresponding YAML:
 dataset_path: "/data/coco2017"
 ```
 
+
+
 ### COCO-WholeBody (pose estimation)
 
 Pose uses the same COCO `train2017/val2017` images plus WholeBody keypoint annotations:
@@ -201,16 +229,20 @@ Edit points: `flexicm/data/datasets.py`, `flexicm/tasks/swin_teacher.py`, `flexi
 
 ---
 
+
+
 ## Base Codec (TIC) Checkpoints
 
 The paper uses the same TIC pretrained weights as AdaptiveICMH / TransTIC:
 
-| Quality | λ (paper) | Checkpoint |
-|:-------:|:---------:|------------|
-| 1 | 0.0035 | [base_codec_1](https://github.com/NYCU-MAPL/TransTIC/releases/download/v1.0/base_codec_1.pth.tar) |
-| 2 | 0.0067 | [base_codec_2](https://github.com/NYCU-MAPL/TransTIC/releases/download/v1.0/base_codec_2.pth.tar) |
-| 3 | 0.0130 | [base_codec_3](https://github.com/NYCU-MAPL/TransTIC/releases/download/v1.0/base_codec_3.pth.tar) |
-| 4 | 0.0250 | [base_codec_4](https://github.com/NYCU-MAPL/TransTIC/releases/download/v1.0/base_codec_4.pth.tar) |
+
+| Quality | λ (paper) | Checkpoint                                                                                        |
+| ------- | --------- | ------------------------------------------------------------------------------------------------- |
+| 1       | 0.0035    | [base_codec_1](https://github.com/NYCU-MAPL/TransTIC/releases/download/v1.0/base_codec_1.pth.tar) |
+| 2       | 0.0067    | [base_codec_2](https://github.com/NYCU-MAPL/TransTIC/releases/download/v1.0/base_codec_2.pth.tar) |
+| 3       | 0.0130    | [base_codec_3](https://github.com/NYCU-MAPL/TransTIC/releases/download/v1.0/base_codec_3.pth.tar) |
+| 4       | 0.0250    | [base_codec_4](https://github.com/NYCU-MAPL/TransTIC/releases/download/v1.0/base_codec_4.pth.tar) |
+
 
 ```bash
 bash scripts/download_base_codecs.sh
@@ -231,8 +263,9 @@ Trained TAIC / C-TAIC weights for eval should be placed under `checkpoints/taic/
 `checkpoints/ctaic/` (see `checkpoints/README.md`). Until then, each quality folder
 contains a `PLACEHOLDER` file.
 
-
 ---
+
+
 
 ## Training
 
@@ -244,6 +277,8 @@ Paper settings:
 - `λ ∈ {0.0035, 0.0067, 0.0130, 0.0250}`
 
 > If GPU memory is insufficient, reduce `batch_size` (optionally use gradient accumulation to approximate the paper effective batch).
+
+
 
 ### Train five TAIC models
 
@@ -260,7 +295,7 @@ Trainable modules: **encoder SFMA + Task Connector**; TIC trunk is frozen.
 
 ### Train three C-TAIC scenarios
 
-Requires a trained **base TAIC** checkpoint (to provide \(\hat{y}_b\)) and Stage-1 weights for the extension task.
+Requires a trained **base TAIC** checkpoint (to provide \hat{y}_b) and Stage-1 weights for the extension task.
 
 ```bash
 # ---- s1: det → instance ----
@@ -278,10 +313,12 @@ python scripts/train_ctaic.py -c configs/ctaic/s3_det_pose.yaml --stage 2
 
 Stage meanings:
 
-| Stage | Mode | Trainable modules | `ŷ_b` |
-|:-----:|------|-------------------|-------|
-| 1 | TAIC mode | SFMA + Task Connector | not used |
-| 2 | C-TAIC mode | Prompt Generator + Condition Generator | from frozen base TAIC AD output |
+
+| Stage | Mode        | Trainable modules                      | `ŷ_b`                           |
+| ----- | ----------- | -------------------------------------- | ------------------------------- |
+| 1     | TAIC mode   | SFMA + Task Connector                  | not used                        |
+| 2     | C-TAIC mode | Prompt Generator + Condition Generator | from frozen base TAIC AD output |
+
 
 Check these config fields:
 
@@ -293,64 +330,113 @@ stage1_checkpoint:     # Stage-1 result loaded in Stage 2
 
 ---
 
+
+
 ## Codec Test
+
+Codec test measures **compression statistics**:
+
+
+| Metric       | Meaning                                                           |
+| ------------ | ----------------------------------------------------------------- |
+| `bpp`        | Likelihood bitrate R                                              |
+| `distortion` | Feature alignment D (Eq. 2 or Eq. 3)                              |
+| `loss`       | R + \lambda D                                                     |
+| `actual_bpp` | Optional: real bitstream size after `compress()` / `decompress()` |
 
 
 For C-TAIC, reported `bpp` is **extension-layer only** (base-layer rate is excluded), matching the paper.
 
-### Prepare checkpoints
+### Prepare codec checkpoints
 
-1. Train models (or copy trained weights) into the `checkpoints/` tree — Download checkpoints.
-2. Edit `dataset_path` / `gpu_id` in `configs/eval/*.yaml`
-
-### Test TAIC (five tasks)
+1. Copy trained weights into `checkpoints/taic/` or `checkpoints/ctaic/` (see `checkpoints/README.md`)
+2. Remove the local `PLACEHOLDER` once `checkpoint_best_loss.pth.tar` is present
+3. Edit `dataset_path` / `gpu_id` in `configs/eval/*.yaml`
 
 ```bash
 python scripts/eval_taic.py -c configs/eval/taic_detection.yaml
-python scripts/eval_taic.py -c configs/eval/taic_semantic.yaml
-python scripts/eval_taic.py -c configs/eval/taic_instance.yaml
-python scripts/eval_taic.py -c configs/eval/taic_panoptic.yaml
-python scripts/eval_taic.py -c configs/eval/taic_pose.yaml
-
-# optional: also measure actual entropy-coded bitstream bpp
 python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --actual-bpp
-
-# optional: smoke test on a few batches
 python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --max-batches 10
-```
 
-Results JSON is written under `logs/eval_taic/<task>/<quality>/`.
-
-### Test C-TAIC (three scenarios)
-
-```bash
 python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml
-python scripts/eval_ctaic.py -c configs/eval/ctaic_s2.yaml
-python scripts/eval_ctaic.py -c configs/eval/ctaic_s3.yaml
-
-# disable base-layer conditioning (TAIC-mode / graceful degradation)
 python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --no-condition
-
-python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --actual-bpp
 ```
-
-Results JSON is written under `logs/eval_ctaic/<scenario>/<quality>/`.
-
-> Task rate–accuracy curves (mAP / mIoU / PQ / OKS vs bpp) are **not** included yet.
 
 ---
 
-## Code Map to the Paper
 
-| Paper component | Code location |
-|-----------------|---------------|
-| SFMA | `flexicm/models/sfma.py` |
-| Task Connector | `flexicm/models/task_connector.py` |
-| TAIC | `flexicm/models/taic.py` |
-| C-TAIC + two-stage freeze | `flexicm/models/ctaic.py` |
-| Prompt / Mask / Cd | `flexicm/models/conditional.py` |
-| Cross-attention (Q from features; K/V include prompts) | `flexicm/models/cross_attention.py` |
-| \(R+\lambda D\) | `flexicm/tasks/losses.py` |
-| Five teachers | `flexicm/tasks/__init__.py` |
 
+## Task-network metric evaluation
+
+To reproduce paper rate–accuracy numbers you must **also** load the official pretrained
+**task networks** and run metrics on COCO val:
+
+
+| Task      | Task network                 | Metric   |
+| --------- | ---------------------------- | -------- |
+| Detection | Cascade Mask R-CNN + Swin-B  | mAP-bbox |
+| Instance  | Cascade Mask R-CNN + Swin-B  | mAP-mask |
+| Semantic  | UPerNet + Swin-B             | mIoU     |
+| Panoptic  | MaskFormer + Swin-B          | PQ       |
+| Pose      | HigherHRNet (HRNet backbone) | mAP-OKS  |
+
+
+Pipeline: `image → codec → h → truncated task net (from Stage2 / FPN) → metric`.
+
+### Install metric dependencies
+
+```bash
+pip install pycocotools
+pip install -U openmim
+mim install mmengine mmcv mmdet mmsegmentation mmpose
+# optional for PQ:
+# pip install git+https://github.com/cocodataset/panopticapi.git
+```
+
+
+
+### Prepare task-network configs & checkpoints
+
+1. Put / symlink real OpenMMLab configs under `configs/task_networks/`
+  (see `configs/task_networks/README.md`; current `*.py` files are stubs)
+2. Download official weights to:
+
+```text
+checkpoints/task_networks/
+├── detection/model.pth
+├── instance/model.pth
+├── semantic/model.pth
+├── panoptic/model.pth
+└── pose/model.pth
+```
+
+1. Set in each `configs/eval/*.yaml`:
+
+```yaml
+task_config: "./configs/task_networks/<real_config>.py"
+task_checkpoint: "./checkpoints/task_networks/<task>/model.pth"
+ann_file: "annotations/instances_val2017.json"
+```
+
+
+
+### Run codec + metrics
+
+```bash
+python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --with-metrics
+python scripts/eval_taic.py -c configs/eval/taic_instance.yaml --with-metrics
+python scripts/eval_taic.py -c configs/eval/taic_semantic.yaml --with-metrics
+python scripts/eval_taic.py -c configs/eval/taic_panoptic.yaml --with-metrics
+python scripts/eval_taic.py -c configs/eval/taic_pose.yaml --with-metrics
+
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --with-metrics
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s2.yaml --with-metrics
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s3.yaml --with-metrics
+```
+
+JSON results (codec + task metrics) are written under `logs/eval_taic/` or `logs/eval_ctaic/`.
+
+> Detection / instance metric paths are the most complete (COCO bbox via pycocotools).
+> Semantic mIoU needs a GT label loader; panoptic PQ needs `panopticapi` + GT folders;
+> pose-from-`h` may need a HigherHRNet stem hook for your exact MMPose version.
 

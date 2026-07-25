@@ -1,8 +1,8 @@
 """Task-specific frozen teachers for FlexICM feature alignment.
 
 Five tasks (paper Sec.III.A / IV.A):
-  1. Object detection      - Faster R-CNN + Swin-B (FPN P2-P6)
-  2. Instance segmentation - Mask R-CNN + Swin-B (FPN P2-P6)
+  1. Object detection      - Cascade Mask R-CNN + Swin-B (official Swin det zoo; mAP-bbox)
+  2. Instance segmentation - Cascade Mask R-CNN + Swin-B (same zoo; mAP-mask)
   3. Semantic segmentation - UPerNet + Swin-B (FPN P2-P6)
   4. Panoptic segmentation - MaskFormer + Swin-B (stages F1-F4)
   5. Pose estimation       - HigherHRNet (original HRNet backbone)
@@ -24,15 +24,22 @@ from flexicm.tasks.swin_teacher import SwinStageTeacher
 
 
 class DetectionTeacher(nn.Module):
-    """Faster R-CNN / Mask R-CNN style: align FPN P2..P6."""
+    """Detection / instance teacher for FPN feature alignment.
+
+    Both tasks use Cascade Mask R-CNN + Swin-B (F1 = 128-d).
+    """
 
     align_mode = "fpn"
-    out_channels = 128  # Swin-B F1
+    out_channels = 128
 
     def __init__(self, pretrained_backbone: bool = True, task: str = "detection"):
         super().__init__()
         self.task = task
-        self.backbone = SwinStageTeacher(pretrained=pretrained_backbone, use_fpn=True)
+        self.backbone = SwinStageTeacher(
+            pretrained=pretrained_backbone,
+            use_fpn=True,
+            swin_variant="base",
+        )
         freeze_module(self)
 
     def gt_features(self, images: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -194,7 +201,7 @@ TASK_META = {
     },
     "instance": {
         "align_mode": "fpn",
-        "out_channels": 128,
+        "out_channels": 128,  # Cascade Mask R-CNN + Swin-B F1
         "metric": "mAP-mask",
         "dataset": "coco",
     },

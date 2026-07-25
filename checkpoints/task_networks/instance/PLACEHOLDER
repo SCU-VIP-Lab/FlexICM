@@ -1,0 +1,2 @@
+PLACEHOLDER: put the official pretrained task-network weight here as model.pth
+Also set task_config in configs/eval/*.yaml to the matching OpenMMLab config.

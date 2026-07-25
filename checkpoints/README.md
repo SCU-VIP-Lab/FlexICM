@@ -70,3 +70,23 @@ python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml
 
 Scripts refuse to run if a `PLACEHOLDER` file is still present or if the `.pth.tar` is missing.
 Task rate–accuracy metrics are not implemented in these scripts yet.
+
+## Task networks (for metric evaluation)
+
+```text
+checkpoints/task_networks/
+├── detection/model.pth
+├── instance/model.pth
+├── semantic/model.pth
+├── panoptic/model.pth
+└── pose/model.pth
+```
+
+These are **official pretrained task networks** (not codec weights).
+Required when running:
+
+```bash
+python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --with-metrics
+```
+
+See `configs/task_networks/README.md` for config/checkpoint pairing.

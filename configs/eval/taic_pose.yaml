@@ -1,12 +1,15 @@
-# Codec test config for TAIC / pose
-# Place real weights at checkpoint path (replace PLACEHOLDER).
+# TAIC eval: codec test + optional --with-metrics
 task: "pose"
 dataset_path: "/data/coco2017"
 split: "val2017"
+ann_file: "annotations/coco_wholebody_val_v1.0.json"
 quality_level: 1
 lmbda: 0.0035
 checkpoint: "./checkpoints/taic/pose/1/checkpoint_best_loss.pth.tar"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
+# official task network (required for --with-metrics)
+task_config: "./configs/task_networks/higherhrnet_w32_coco_wholebody.py"
+task_checkpoint: "./checkpoints/task_networks/pose/model.pth"
 gpu_id: 0
 cuda: true
 test_batch_size: 1

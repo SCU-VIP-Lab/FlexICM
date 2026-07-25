@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Codec test for C-TAIC (extension layer).
+"""Test / eval for C-TAIC: codec stats + optional full task-network metrics.
 
-Reports extension-layer likelihood bpp and feature distortion D (paper: bpp excludes base layer).
-Optional actual bitstream bpp via compress/decompress.
-Does NOT compute task metrics (mAP / mIoU / PQ / OKS) — those come later.
-
-Example:
+Examples:
   python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml
-  python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --no-condition   # TAIC-mode ablation
-  python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --actual-bpp
+  python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --with-metrics
+  python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --no-condition --with-metrics
 """
 
 from __future__ import annotations
@@ -27,9 +23,16 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from flexicm.data import COCOImageDataset, COCOWholeBodyImageDataset, ImageFolderDataset, build_test_transform
+from flexicm.data.coco_eval import COCOEvalDataset, TASK_ANN_FILES, coco_eval_collate
 from flexicm.models import CTAIC, TAIC
 from flexicm.tasks import TASK_META, build_teacher
 from flexicm.tasks.losses import TAICCriterion
+from flexicm.tasks.metric_eval import run_task_metric_eval
+from flexicm.tasks.metric_runners import (
+    DEFAULT_TASK_NET_CKPTS,
+    DEFAULT_TASK_NET_CONFIGS,
+    build_metric_runner,
+)
 from flexicm.utils.codec_test import resolve_ckpt, test_ctaic_loader
 from flexicm.utils.train_utils import load_checkpoint_dict, load_yaml_config, set_seed
 
@@ -41,14 +44,15 @@ SCENARIOS = {
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser("Codec test: FlexICM C-TAIC")
-    parser.add_argument("-c", "--config", required=True, help="configs/eval/ctaic_*.yaml")
+    parser = argparse.ArgumentParser("Test FlexICM C-TAIC (codec + optional task metrics)")
+    parser.add_argument("-c", "--config", required=True)
     given, remaining = parser.parse_known_args(argv)
     cfg_path = given.config if os.path.isabs(given.config) else os.path.join(REPO_ROOT, given.config)
     cfg = load_yaml_config(cfg_path)
     parser.set_defaults(**cfg)
     parser.add_argument("--actual-bpp", action="store_true")
-    parser.add_argument("--no-condition", action="store_true", help="Disable base-layer conditioning (TAIC mode)")
+    parser.add_argument("--no-condition", action="store_true")
+    parser.add_argument("--with-metrics", action="store_true")
     parser.add_argument("--max-batches", type=int, default=None)
     parser.add_argument("--split", type=str, default=None)
     args = parser.parse_args(remaining)
@@ -57,10 +61,12 @@ def parse_args(argv):
         args.actual_bpp = True
     if "--no-condition" in argv:
         args.no_condition = True
+    if "--with-metrics" in argv:
+        args.with_metrics = True
     return args
 
 
-def build_loader(args, ext_task, device):
+def build_codec_loader(args, ext_task, device):
     split = args.split or getattr(args, "split", None) or "val2017"
     tf = build_test_transform()
     root = args.dataset_path
@@ -79,6 +85,24 @@ def build_loader(args, ext_task, device):
         num_workers=getattr(args, "num_workers", 4),
         pin_memory=(device == "cuda"),
     )
+
+
+def build_metric_loader(args, ext_task, device):
+    split = args.split or getattr(args, "split", None) or "val2017"
+    ann_rel = getattr(args, "ann_file", None) or TASK_ANN_FILES.get(ext_task)
+    ann_file = ann_rel if os.path.isabs(ann_rel) else os.path.join(args.dataset_path, ann_rel)
+    dataset = COCOEvalDataset(
+        args.dataset_path, ann_file=ann_file, image_prefix=split, transform=build_test_transform()
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=getattr(args, "num_workers", 4),
+        pin_memory=(device == "cuda"),
+        collate_fn=coco_eval_collate,
+    )
+    return loader, ann_file
 
 
 def main(argv):
@@ -118,38 +142,23 @@ def main(argv):
     teacher = build_teacher(ext_task, pretrained_backbone=getattr(args, "pretrained_backbone", True))
     teacher = teacher.to(device).eval()
     criterion = TAICCriterion(lmbda=lmbda, align_mode=align_mode)
+    codec_loader = build_codec_loader(args, ext_task, device)
 
-    loader = build_loader(args, ext_task, device)
-    print(
-        f"Test set size: {len(loader.dataset)}  device={device}  "
-        f"scenario={scenario}  use_condition={use_condition}"
-    )
-
-    result = test_ctaic_loader(
+    codec_result = test_ctaic_loader(
         net,
         base,
         teacher,
-        loader,
+        codec_loader,
         criterion,
         device,
         use_condition=use_condition,
-        align_divisor=256,
         run_actual_bpp=bool(getattr(args, "actual_bpp", False)),
         max_batches=args.max_batches,
     )
-
     print("==== C-TAIC codec test summary ====")
-    for k, v in result.items():
-        if isinstance(v, float):
-            print(f"  {k}: {v:.6f}")
-        else:
-            print(f"  {k}: {v}")
+    for k, v in codec_result.items():
+        print(f"  {k}: {v:.6f}" if isinstance(v, float) else f"  {k}: {v}")
 
-    out_dir = getattr(args, "result_dir", None) or os.path.join(
-        REPO_ROOT, "logs", "eval_ctaic", scenario, str(getattr(args, "quality_level", 1))
-    )
-    os.makedirs(out_dir, exist_ok=True)
-    out_json = os.path.join(out_dir, f"codec_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     payload = {
         "scenario": scenario,
         "base_task": base_task,
@@ -157,10 +166,50 @@ def main(argv):
         "checkpoint": ext_ckpt,
         "base_taic_checkpoint": base_ckpt,
         "config": args.config,
-        "result": result,
+        "codec_result": codec_result,
     }
+
+    if getattr(args, "with_metrics", False):
+        task_cfg = getattr(args, "task_config", None) or DEFAULT_TASK_NET_CONFIGS[ext_task]
+        task_ckpt = getattr(args, "task_checkpoint", None) or DEFAULT_TASK_NET_CKPTS[ext_task]
+        if not os.path.isabs(task_cfg):
+            task_cfg = os.path.join(REPO_ROOT, task_cfg)
+        task_ckpt = resolve_ckpt(task_ckpt, REPO_ROOT, label=f"{ext_task} task-network checkpoint")
+
+        print(f"[metric] loading extension task network:\n  config={task_cfg}\n  ckpt={task_ckpt}")
+        runner = build_metric_runner(ext_task, device=device)
+        runner.load(task_cfg, task_ckpt)
+
+        metric_loader, ann_file = build_metric_loader(args, ext_task, device)
+        metrics = run_task_metric_eval(
+            net,
+            runner,
+            metric_loader,
+            device,
+            ann_file=ann_file,
+            use_condition=use_condition,
+            base_codec=base if use_condition else None,
+            max_batches=args.max_batches,
+            finalize_kwargs={
+                "gt_folder": getattr(args, "panoptic_gt_folder", None),
+                "pred_folder": getattr(args, "panoptic_pred_folder", None),
+                "num_classes": getattr(args, "num_classes", 133),
+            },
+        )
+        print("==== C-TAIC task metric summary ====")
+        for k, v in metrics.items():
+            print(f"  {k}: {v}")
+        payload["task_config"] = task_cfg
+        payload["task_checkpoint"] = task_ckpt
+        payload["task_metrics"] = metrics
+
+    out_dir = getattr(args, "result_dir", None) or os.path.join(
+        REPO_ROOT, "logs", "eval_ctaic", scenario, str(getattr(args, "quality_level", 1))
+    )
+    os.makedirs(out_dir, exist_ok=True)
+    out_json = os.path.join(out_dir, f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(out_json, "w") as f:
-        json.dump(payload, f, indent=2)
+        json.dump(payload, f, indent=2, default=str)
     print(f"Wrote {out_json}")
     return 0
 

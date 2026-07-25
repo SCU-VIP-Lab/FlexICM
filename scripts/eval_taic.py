@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
-"""Codec test for TAIC (base layer).
+"""Test / eval for TAIC: codec stats + optional full task-network metrics.
 
-Reports likelihood bpp, feature-alignment distortion D, and optional actual bitstream bpp.
-Does NOT compute task metrics (mAP / mIoU / PQ / OKS) — those come later.
+Codec-only (default):
+  bpp, feature distortion D, loss; optional --actual-bpp
 
-Example:
+With task metrics (--with-metrics):
+  also load official task-network config/checkpoint, run truncated task net from h,
+  report mAP-bbox / mAP-mask / mIoU / PQ / mAP-OKS (task-dependent).
+
+Examples:
   python scripts/eval_taic.py -c configs/eval/taic_detection.yaml
-  python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --actual-bpp
+  python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --with-metrics
+  python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --with-metrics --max-batches 50
 """
 
 from __future__ import annotations
@@ -30,31 +35,41 @@ from flexicm.data import (
     ImageFolderDataset,
     build_test_transform,
 )
+from flexicm.data.coco_eval import COCOEvalDataset, TASK_ANN_FILES, coco_eval_collate
 from flexicm.models import TAIC
 from flexicm.tasks import TASK_META, build_teacher
 from flexicm.tasks.losses import TAICCriterion
+from flexicm.tasks.metric_eval import run_task_metric_eval
+from flexicm.tasks.metric_runners import (
+    DEFAULT_TASK_NET_CKPTS,
+    DEFAULT_TASK_NET_CONFIGS,
+    build_metric_runner,
+)
 from flexicm.utils.codec_test import resolve_ckpt, test_taic_loader
 from flexicm.utils.train_utils import load_checkpoint_dict, load_yaml_config, set_seed
 
 
 def parse_args(argv):
-    parser = argparse.ArgumentParser("Codec test: FlexICM TAIC")
+    parser = argparse.ArgumentParser("Test FlexICM TAIC (codec + optional task metrics)")
     parser.add_argument("-c", "--config", required=True, help="configs/eval/taic_*.yaml")
     given, remaining = parser.parse_known_args(argv)
     cfg_path = given.config if os.path.isabs(given.config) else os.path.join(REPO_ROOT, given.config)
     cfg = load_yaml_config(cfg_path)
     parser.set_defaults(**cfg)
-    parser.add_argument("--actual-bpp", action="store_true", help="Also run compress/decompress bpp")
-    parser.add_argument("--max-batches", type=int, default=None, help="Limit batches for a smoke test")
-    parser.add_argument("--split", type=str, default=None, help="Override image split folder, e.g. val2017")
+    parser.add_argument("--actual-bpp", action="store_true")
+    parser.add_argument("--with-metrics", action="store_true", help="Run full task-network metrics")
+    parser.add_argument("--max-batches", type=int, default=None)
+    parser.add_argument("--split", type=str, default=None)
     args = parser.parse_args(remaining)
     args.config = cfg_path
-    if given.__dict__.get("actual_bpp") or "--actual-bpp" in argv:
+    if "--actual-bpp" in argv:
         args.actual_bpp = True
+    if "--with-metrics" in argv:
+        args.with_metrics = True
     return args
 
 
-def build_loader(args, device):
+def build_codec_loader(args, device):
     split = args.split or getattr(args, "split", None) or "val2017"
     tf = build_test_transform()
     root = args.dataset_path
@@ -66,7 +81,6 @@ def build_loader(args, device):
             dataset = COCOImageDataset(root, split, tf)
     else:
         dataset = ImageFolderDataset(root, tf)
-
     return DataLoader(
         dataset,
         batch_size=getattr(args, "test_batch_size", 1),
@@ -74,6 +88,29 @@ def build_loader(args, device):
         num_workers=getattr(args, "num_workers", 4),
         pin_memory=(device == "cuda"),
     )
+
+
+def build_metric_loader(args, device):
+    split = args.split or getattr(args, "split", None) or "val2017"
+    ann_rel = getattr(args, "ann_file", None) or TASK_ANN_FILES.get(args.task)
+    if ann_rel is None:
+        raise ValueError(f"No ann_file for task={args.task}")
+    ann_file = ann_rel if os.path.isabs(ann_rel) else os.path.join(args.dataset_path, ann_rel)
+    dataset = COCOEvalDataset(
+        args.dataset_path,
+        ann_file=ann_file,
+        image_prefix=split,
+        transform=build_test_transform(),
+    )
+    loader = DataLoader(
+        dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=getattr(args, "num_workers", 4),
+        pin_memory=(device == "cuda"),
+        collate_fn=coco_eval_collate,
+    )
+    return loader, ann_file
 
 
 def main(argv):
@@ -98,44 +135,77 @@ def main(argv):
     print(f"load_state_dict: missing={len(missing.missing_keys)} unexpected={len(missing.unexpected_keys)}")
     net.eval()
 
+    # ---- codec test ----
     teacher = build_teacher(task, pretrained_backbone=getattr(args, "pretrained_backbone", True))
     teacher = teacher.to(device).eval()
     criterion = TAICCriterion(lmbda=lmbda, align_mode=align_mode)
+    codec_loader = build_codec_loader(args, device)
+    print(f"[codec] test set size: {len(codec_loader.dataset)}  device={device}  task={task}")
 
-    loader = build_loader(args, device)
-    print(f"Test set size: {len(loader.dataset)}  device={device}  task={task}")
-
-    result = test_taic_loader(
+    codec_result = test_taic_loader(
         net,
         teacher,
-        loader,
+        codec_loader,
         criterion,
         device,
         align_divisor=256,
         run_actual_bpp=bool(getattr(args, "actual_bpp", False)),
         max_batches=args.max_batches,
     )
-
     print("==== TAIC codec test summary ====")
-    for k, v in result.items():
-        if isinstance(v, float):
-            print(f"  {k}: {v:.6f}")
-        else:
+    for k, v in codec_result.items():
+        print(f"  {k}: {v:.6f}" if isinstance(v, float) else f"  {k}: {v}")
+
+    payload = {
+        "task": task,
+        "checkpoint": ckpt,
+        "config": args.config,
+        "codec_result": codec_result,
+    }
+
+    # ---- optional task metrics ----
+    if getattr(args, "with_metrics", False):
+        task_cfg = getattr(args, "task_config", None) or DEFAULT_TASK_NET_CONFIGS[task]
+        task_ckpt = getattr(args, "task_checkpoint", None) or DEFAULT_TASK_NET_CKPTS[task]
+        if not os.path.isabs(task_cfg):
+            task_cfg = os.path.join(REPO_ROOT, task_cfg)
+        task_ckpt = resolve_ckpt(task_ckpt, REPO_ROOT, label=f"{task} task-network checkpoint")
+
+        print(f"[metric] loading task network:\n  config={task_cfg}\n  ckpt={task_ckpt}")
+        runner = build_metric_runner(task, device=device)
+        runner.load(task_cfg, task_ckpt)
+
+        metric_loader, ann_file = build_metric_loader(args, device)
+        print(f"[metric] COCO eval images: {len(metric_loader.dataset)}  ann={ann_file}")
+        metrics = run_task_metric_eval(
+            net,
+            runner,
+            metric_loader,
+            device,
+            ann_file=ann_file,
+            use_condition=False,
+            base_codec=None,
+            max_batches=args.max_batches,
+            finalize_kwargs={
+                "gt_folder": getattr(args, "panoptic_gt_folder", None),
+                "pred_folder": getattr(args, "panoptic_pred_folder", None),
+                "num_classes": getattr(args, "num_classes", 133),
+            },
+        )
+        print("==== TAIC task metric summary ====")
+        for k, v in metrics.items():
             print(f"  {k}: {v}")
+        payload["task_config"] = task_cfg
+        payload["task_checkpoint"] = task_ckpt
+        payload["task_metrics"] = metrics
 
     out_dir = getattr(args, "result_dir", None) or os.path.join(
         REPO_ROOT, "logs", "eval_taic", task, str(getattr(args, "quality_level", 1))
     )
     os.makedirs(out_dir, exist_ok=True)
-    out_json = os.path.join(out_dir, f"codec_test_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-    payload = {
-        "task": task,
-        "checkpoint": ckpt,
-        "config": args.config,
-        "result": result,
-    }
+    out_json = os.path.join(out_dir, f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(out_json, "w") as f:
-        json.dump(payload, f, indent=2)
+        json.dump(payload, f, indent=2, default=str)
     print(f"Wrote {out_json}")
     return 0
 

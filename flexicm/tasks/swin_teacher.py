@@ -1,6 +1,8 @@
-"""Swin-B backbone helpers shared by detection / segmentation teachers.
+"""Swin backbone helpers shared by detection / segmentation teachers.
 
-Matches Fig.1(c): Stage depths [2,2,18,2], F1 at H/4 with C=128 (Swin-B).
+Swin-B: F1 at H/4 with C=128 (Cascade Mask R-CNN / UPerNet / MaskFormer).
+Optional Swin-T/S variants are supported via `swin_variant` for experiments.
+
 h from TAIC replaces F1 and is fed into Stage 2 onward.
 """
 
@@ -13,6 +15,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from flexicm.tasks.losses import freeze_module
+
+_SWIN_TIMM_NAMES = {
+    "base": "swin_base_patch4_window7_224",
+    "tiny": "swin_tiny_patch4_window7_224",
+    "small": "swin_small_patch4_window7_224",
+}
 
 
 class SimpleFPN(nn.Module):
@@ -36,45 +44,58 @@ class SimpleFPN(nn.Module):
         return {"p2": p2, "p3": p3, "p4": p4, "p5": p5, "p6": p6}
 
 
-def build_swin_b_backbone(pretrained: bool = True):
-    """Build Swin-B via timm; returns backbone module with forward_features stages."""
+def build_swin_backbone(pretrained: bool = True, swin_variant: str = "base"):
+    """Build Swin via timm; returns backbone with features_only stages."""
     try:
         import timm
     except ImportError as e:
-        raise ImportError("Please install timm to use Swin-B teachers: pip install timm") from e
+        raise ImportError("Please install timm to use Swin teachers: pip install timm") from e
 
-    # features_only gives list of stage outputs
+    key = swin_variant.lower().replace("swin-", "").replace("swin_", "")
+    if key not in _SWIN_TIMM_NAMES:
+        raise ValueError(f"Unknown swin_variant={swin_variant!r}; expected one of {list(_SWIN_TIMM_NAMES)}")
+
     model = timm.create_model(
-        "swin_base_patch4_window7_224",
+        _SWIN_TIMM_NAMES[key],
         pretrained=pretrained,
         features_only=True,
         out_indices=(0, 1, 2, 3),
-        img_size=224,  # overridden dynamically by dynamic image size support in newer timm
+        img_size=224,
     )
     return model
 
 
+def build_swin_b_backbone(pretrained: bool = True):
+    """Backward-compatible alias for Swin-B."""
+    return build_swin_backbone(pretrained=pretrained, swin_variant="base")
+
+
 class SwinStageTeacher(nn.Module):
     """
-    Extract F1..F4 from a Swin-B backbone.
+    Extract F1..F4 from a Swin backbone (base / tiny / small).
     Truncated path: treat input h as F1, run remaining stages.
     """
 
-    def __init__(self, pretrained: bool = True, use_fpn: bool = True, fpn_dim: int = 256):
+    def __init__(
+        self,
+        pretrained: bool = True,
+        use_fpn: bool = True,
+        fpn_dim: int = 256,
+        swin_variant: str = "base",
+    ):
         super().__init__()
-        self.backbone = freeze_module(build_swin_b_backbone(pretrained=pretrained))
-        # timm swin_base features_only channel dims
-        self.feat_channels = list(self.backbone.feature_info.channels())  # typically [128,256,512,1024]
+        self.swin_variant = swin_variant
+        self.backbone = freeze_module(
+            build_swin_backbone(pretrained=pretrained, swin_variant=swin_variant)
+        )
+        # timm: Swin-B [128,256,512,1024], Swin-T [96,192,384,768]
+        self.feat_channels = list(self.backbone.feature_info.channels())
         self.use_fpn = use_fpn
         if use_fpn:
             self.fpn = freeze_module(SimpleFPN(self.feat_channels, fpn_dim=fpn_dim))
         else:
             self.fpn = None
 
-        # Build stage modules for truncated forward from F1.
-        # timm Swin features_only structure varies; we use a practical approach:
-        # full forward for GT; for truncated, interpolate/project h and run full backbone
-        # with early feature replacement via forward hooks when possible.
         self._f1_dim = self.feat_channels[0]
 
     @property

@@ -22,3 +22,5 @@ cuda: true
 save: true
 seed: 42
 pretrained_backbone: true
+out_channels: 128  # extension = Cascade Mask R-CNN + Swin-B
+align_mode: "fpn"

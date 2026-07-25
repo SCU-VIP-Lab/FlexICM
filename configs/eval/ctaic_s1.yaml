@@ -1,12 +1,14 @@
-# Codec test config for C-TAIC scenario s1 (det -> instance)
 scenario: "s1"
 dataset_path: "/data/coco2017"
 split: "val2017"
+ann_file: "annotations/instances_val2017.json"
 quality_level: 1
 lmbda: 0.0035
 checkpoint: "./checkpoints/ctaic/s1_det_instance/stage2/1/checkpoint_best_loss.pth.tar"
 base_taic_checkpoint: "./checkpoints/taic/detection/1/checkpoint_best_loss.pth.tar"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
+task_config: "./configs/task_networks/cascade_mask_rcnn_swin_base_coco.py"
+task_checkpoint: "./checkpoints/task_networks/instance/model.pth"
 gpu_id: 0
 cuda: true
 test_batch_size: 1

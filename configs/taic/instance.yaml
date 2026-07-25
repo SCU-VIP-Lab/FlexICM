@@ -1,3 +1,4 @@
+# FlexICM TAIC - Instance Segmentation (Cascade Mask R-CNN + Swin-B)
 root: "logs"
 exp_name: "taic_instance"
 task: "instance"
@@ -17,5 +18,5 @@ cuda: true
 save: true
 seed: 42
 pretrained_backbone: true
-out_channels: 128
+out_channels: 128  # Cascade Mask R-CNN + Swin-B F1
 align_mode: "fpn"
