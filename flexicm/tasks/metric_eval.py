@@ -55,6 +55,12 @@ def run_task_metric_eval(
         for image, meta in zip(images_list, metas):
             image = image.unsqueeze(0).to(device)
             _, _, H, W = image.shape
+            ori_h = int(meta["height"])
+            ori_w = int(meta["width"])
+            # If the image was resized (e.g. eval_size=256), boxes must be
+            # mapped back with the correct scale_factor for COCO mAP.
+            scale_w = float(W) / float(ori_w) if ori_w > 0 else 1.0
+            scale_h = float(H) / float(ori_h) if ori_h > 0 else 1.0
             x, _ = pad_for_codec(image, divisor=align_divisor, device=device)
 
             y_b = None
@@ -77,6 +83,7 @@ def run_task_metric_eval(
             meta = dict(meta)
             meta["pad_height"] = int(x.shape[-2])
             meta["pad_width"] = int(x.shape[-1])
+            meta["scale_factor"] = (scale_w, scale_h)
             pred = runner.predict_from_h(h, meta)
             predictions.append(pred)
 

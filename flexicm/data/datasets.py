@@ -28,8 +28,16 @@ def build_train_transform(patch_size: int = 256) -> Callable:
     )
 
 
-def build_test_transform() -> Callable:
-    return transforms.ToTensor()
+def build_test_transform(eval_size: Optional[int] = None) -> Callable:
+    """Eval preprocess. If ``eval_size`` is set (e.g. 256), force HxW = size×size."""
+    if eval_size is None:
+        return transforms.ToTensor()
+    return transforms.Compose(
+        [
+            transforms.Resize((int(eval_size), int(eval_size))),
+            transforms.ToTensor(),
+        ]
+    )
 
 
 class ImageFolderDataset(Dataset):

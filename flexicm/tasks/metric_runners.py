@@ -204,6 +204,11 @@ class DetectionMetricRunner(TaskMetricRunner):
         # FPN strides line up; boxes are rescaled back to ori_shape.
         pad_h = int(img_meta.get("pad_height", h.shape[-2] * 4))
         pad_w = int(img_meta.get("pad_width", h.shape[-1] * 4))
+        sf = img_meta.get("scale_factor", (1.0, 1.0))
+        if isinstance(sf, (int, float)):
+            scale_factor = (float(sf), float(sf))
+        else:
+            scale_factor = (float(sf[0]), float(sf[1]))
         try:
             # MMDet 3.x style
             from mmdet.structures import DetDataSample
@@ -214,7 +219,7 @@ class DetectionMetricRunner(TaskMetricRunner):
                     img_shape=(pad_h, pad_w),
                     ori_shape=(ori_h, ori_w),
                     pad_shape=(pad_h, pad_w),
-                    scale_factor=(1.0, 1.0),
+                    scale_factor=scale_factor,
                     img_id=img_meta.get("image_id"),
                 )
             )
@@ -241,7 +246,7 @@ class DetectionMetricRunner(TaskMetricRunner):
                     img_shape=(pad_h, pad_w, 3),
                     ori_shape=(ori_h, ori_w, 3),
                     pad_shape=(pad_h, pad_w, 3),
-                    scale_factor=1.0,
+                    scale_factor=scale_factor,
                     flip=False,
                 )
             ]

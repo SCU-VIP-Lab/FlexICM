@@ -5,8 +5,10 @@ split: "val2017"
 ann_file: "annotations/instances_val2017.json"
 quality_level: 1
 lmbda: 0.0035
-checkpoint: "./logs/taic_detection/1/checkpoint_0.1040.pth.tar"
+checkpoint: "./logs/taic_detection/1/checkpoint_0.1334.pth.tar"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
+# null = original COCO resolution; 256 = force 256x256 (aspect stretched)
+eval_size: null
 # official task network (required for --with-metrics)
 gpu_id: 0
 cuda: true

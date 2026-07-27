@@ -210,7 +210,7 @@ def main(argv):
     for epoch in range(args.epochs):
         logging.info(f"===== Epoch {epoch}/{args.epochs} =====")
         train_stats = train_one_epoch(net, teacher, train_loader, optimizer, criterion, device)
-        if epoch % 10 == 0:
+        if epoch % 2 == 0:
             val_stats = validate(net, teacher, val_loader, criterion, device)
             logging.info(f"train={train_stats} val={val_stats}")
             is_best = val_stats["loss"] < best

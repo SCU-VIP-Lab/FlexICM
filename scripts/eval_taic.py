@@ -65,6 +65,12 @@ def parse_args(argv):
     parser.add_argument("--with-metrics", action="store_true", help="Run full task-network metrics")
     parser.add_argument("--max-batches", type=int, default=None)
     parser.add_argument("--split", type=str, default=None)
+    parser.add_argument(
+        "--eval-size",
+        type=int,
+        default=cfg.get("eval_size", None),
+        help="If set (e.g. 256), resize eval images to eval_size×eval_size",
+    )
     args = parser.parse_args(remaining)
     args.config = cfg_path
     if "--actual-bpp" in argv:
@@ -76,7 +82,8 @@ def parse_args(argv):
 
 def build_codec_loader(args, device):
     split = args.split or getattr(args, "split", None) or "val2017"
-    tf = build_test_transform()
+    eval_size = getattr(args, "eval_size", None)
+    tf = build_test_transform(eval_size=eval_size)
     root = args.dataset_path
     split_dir = os.path.join(root, split)
     if os.path.isdir(split_dir):
@@ -101,11 +108,12 @@ def build_metric_loader(args, device):
     if ann_rel is None:
         raise ValueError(f"No ann_file for task={args.task}")
     ann_file = ann_rel if os.path.isabs(ann_rel) else os.path.join(args.dataset_path, ann_rel)
+    eval_size = getattr(args, "eval_size", None)
     dataset = COCOEvalDataset(
         args.dataset_path,
         ann_file=ann_file,
         image_prefix=split,
-        transform=build_test_transform(),
+        transform=build_test_transform(eval_size=eval_size),
     )
     loader = DataLoader(
         dataset,
@@ -152,7 +160,9 @@ def main(argv):
     teacher = teacher.to(device).eval()
     criterion = TAICCriterion(lmbda=lmbda, align_mode=align_mode)
     codec_loader = build_codec_loader(args, device)
-    print(f"[codec] test set size: {len(codec_loader.dataset)}  device={device}  task={task}")
+    eval_size = getattr(args, "eval_size", None)
+    size_msg = f"{eval_size}x{eval_size}" if eval_size else "original"
+    print(f"[codec] test set size: {len(codec_loader.dataset)}  device={device}  task={task}  input={size_msg}")
 
     codec_result = test_taic_loader(
         net,

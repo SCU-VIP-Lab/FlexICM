@@ -363,11 +363,7 @@ For C-TAIC, reported `bpp` is **extension-layer only** (base-layer rate is exclu
 
 ```bash
 python scripts/eval_taic.py -c configs/eval/taic_detection.yaml
-python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --actual-bpp
-python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --max-batches 10
-
 python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml
-python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --no-condition
 ```
 
 ---
@@ -431,15 +427,15 @@ ann_file: "annotations/instances_val2017.json"
 ### Run codec + metrics
 
 ```bash
-python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --with-metrics
-python scripts/eval_taic.py -c configs/eval/taic_instance.yaml --with-metrics
-python scripts/eval_taic.py -c configs/eval/taic_semantic.yaml --with-metrics
-python scripts/eval_taic.py -c configs/eval/taic_panoptic.yaml --with-metrics
-python scripts/eval_taic.py -c configs/eval/taic_pose.yaml --with-metrics
+python scripts/eval_taic.py -c configs/eval/taic_detection.yaml 
+python scripts/eval_taic.py -c configs/eval/taic_instance.yaml
+python scripts/eval_taic.py -c configs/eval/taic_semantic.yaml
+python scripts/eval_taic.py -c configs/eval/taic_panoptic.yaml 
+python scripts/eval_taic.py -c configs/eval/taic_pose.yaml 
 
-python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --with-metrics
-python scripts/eval_ctaic.py -c configs/eval/ctaic_s2.yaml --with-metrics
-python scripts/eval_ctaic.py -c configs/eval/ctaic_s3.yaml --with-metrics
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml 
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s2.yaml
+python scripts/eval_ctaic.py -c configs/eval/ctaic_s3.yaml 
 ```
 
 JSON results (codec + task metrics) are written under `logs/eval_taic/` or `logs/eval_ctaic/`.
