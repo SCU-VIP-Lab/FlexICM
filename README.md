@@ -1,3 +1,11 @@
+---
+license: mit
+library_name: pytorch
+tags:
+  - compression
+  - detection
+---
+
 # FlexICM: A Flexible Image Coding for Machines Framework
 
 Official codebase for the paper **FlexICM: A Flexible Image Coding for Machines Framework** (Tianma Shen, Ying Liu).
