@@ -51,7 +51,12 @@ def parse_args(argv):
     parser.add_argument("--name", default=datetime.now().strftime("%Y-%m-%d_%H_%M_%S"))
     given, remaining = parser.parse_known_args(argv)
     cfg = load_yaml_config(given.config)
-    parser.set_defaults(**cfg)
+    # -c already consumed by the first parse; keep it as a default for the second pass
+    parser.set_defaults(config=given.config, **cfg)
+    for action in parser._actions:
+        if "--config" in action.option_strings:
+            action.required = False
+            break
     parser.add_argument("-T", "--TEST", action="store_true")
     args = parser.parse_args(remaining)
     args.config = given.config
@@ -67,12 +72,12 @@ def validate(model, teacher, loader, criterion, device, align_divisor=256):
         align = Alignment(divisor=align_divisor, mode="pad", padding_mode="constant").to(device)
         x = align.align(images)
         out = model(x)
-        # resume spatial pad on h
-        h = align.resume(out["h"])
-        out["h"] = h
+        # Keep teacher + codec features on the aligned (padded) grid so the Swin
+        # backbone always sees a patch/window-divisible size. bpp still uses the
+        # original pixel count below.
         with torch.no_grad():
-            gt = teacher.gt_features(images)
-            pred = teacher.pred_features(h)
+            gt = teacher.gt_features(x)
+            pred = teacher.pred_features(out["h"])
         N, _, H, W = images.shape
         stats = criterion(out, pred, gt, num_pixels=N * H * W)
         for k in meters:
@@ -126,9 +131,9 @@ def main(argv):
     # data
     train_tf = build_train_transform(args.patch_size)
     if task == "pose":
-        train_set = COCOWholeBodyImageDataset(args.dataset_path, "train2017", train_tf)
+        train_set = COCOWholeBodyImageDataset(args.dataset_path, "val2017", train_tf)
     else:
-        train_set = COCOImageDataset(args.dataset_path, "train2017", train_tf)
+        train_set = COCOImageDataset(args.dataset_path, "val2017", train_tf)
     val_split = getattr(args, "val_split", "val2017")
     val_root = os.path.join(args.dataset_path, val_split)
     if not os.path.isdir(val_root):
@@ -163,13 +168,26 @@ def main(argv):
         logging.info(f"Loading base TIC codec from {args.base_codec}")
         state, _ = load_checkpoint_dict(args.base_codec, map_location=device)
         net.load_base_codec(state, strict=False)
-    net.freeze_base_codec()
+    if getattr(args, "freeze_base_codec", True):
+        net.freeze_base_codec()
+        logging.info("Base TIC codec frozen")
+    else:
+        for p in net.parameters():
+            p.requires_grad = True
+        logging.info("Base TIC codec unfrozen; training the entire TAIC model")
     logging.info(
         f"Trainable params: {sum(p.numel() for p in net.parameters() if p.requires_grad)/1e6:.3f}M / "
         f"total {sum(p.numel() for p in net.parameters())/1e6:.3f}M"
     )
 
-    teacher = build_teacher(task, pretrained_backbone=getattr(args, "pretrained_backbone", True))
+    teacher = build_teacher(
+        task,
+        pretrained_backbone=getattr(args, "pretrained_backbone", True),
+        use_official_teacher=getattr(args, "use_official_teacher", True),
+        task_config=getattr(args, "task_config", None),
+        task_checkpoint=getattr(args, "task_checkpoint", None),
+        device=device,
+    )
     teacher = teacher.to(device).eval()
 
     if args.checkpoint:
@@ -192,22 +210,23 @@ def main(argv):
     for epoch in range(args.epochs):
         logging.info(f"===== Epoch {epoch}/{args.epochs} =====")
         train_stats = train_one_epoch(net, teacher, train_loader, optimizer, criterion, device)
-        val_stats = validate(net, teacher, val_loader, criterion, device)
-        logging.info(f"train={train_stats} val={val_stats}")
-        is_best = val_stats["loss"] < best
-        best = min(best, val_stats["loss"])
-        if args.save:
-            save_checkpoint(
-                {
-                    "epoch": epoch,
-                    "state_dict": net.module.state_dict() if hasattr(net, "module") else net.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "loss": val_stats["loss"],
-                    "args": vars(args),
-                },
-                is_best,
-                out_dir,
-            )
+        if epoch % 10 == 0:
+            val_stats = validate(net, teacher, val_loader, criterion, device)
+            logging.info(f"train={train_stats} val={val_stats}")
+            is_best = val_stats["loss"] < best
+            best = min(best, val_stats["loss"])
+            if args.save:
+                save_checkpoint(
+                    {
+                        "epoch": epoch,
+                        "state_dict": net.module.state_dict() if hasattr(net, "module") else net.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "loss": val_stats["loss"],
+                        "args": vars(args),
+                    },
+                    is_best,
+                    out_dir,
+                )
 
 
 if __name__ == "__main__":

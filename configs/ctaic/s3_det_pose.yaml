@@ -2,7 +2,7 @@
 root: "logs"
 exp_name: "ctaic_s3"
 scenario: "s3"
-dataset_path: "/data/coco2017"
+dataset_path: "/data/Dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 base_taic_checkpoint: "./checkpoints/taic/detection/1/checkpoint_best_loss.pth.tar"
 taic_init: "./checkpoints/taic/pose/1/checkpoint_best_loss.pth.tar"
@@ -22,3 +22,8 @@ seed: 42
 pretrained_backbone: true
 out_channels: 32
 align_mode: "stages"
+
+# Official task-network teacher (backbone/neck) for feature alignment D
+use_official_teacher: true
+task_config: "./checkpoints/task_networks/pose/ae_hrnet-w32_8xb24-300e_coco-512x512.py"
+task_checkpoint: "./checkpoints/task_networks/pose/hrnet_w32_coco_512x512-bcb8c247_20200816.pth"

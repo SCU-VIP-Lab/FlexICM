@@ -35,6 +35,7 @@ from flexicm.data import COCOImageDataset, COCOWholeBodyImageDataset, build_trai
 from flexicm.models import CTAIC, TAIC
 from flexicm.tasks import TASK_META, build_teacher
 from flexicm.tasks.losses import TAICCriterion
+from flexicm.utils.alignment import Alignment
 from flexicm.utils.train_utils import (
     AverageMeter,
     CustomDataParallel,
@@ -61,7 +62,12 @@ def parse_args(argv):
     parser.add_argument("--name", default=datetime.now().strftime("%Y-%m-%d_%H_%M_%S"))
     given, remaining = parser.parse_known_args(argv)
     cfg = load_yaml_config(given.config)
-    parser.set_defaults(**cfg)
+    # -c/--stage already consumed by the first parse; keep them for the second pass
+    parser.set_defaults(config=given.config, stage=given.stage, **cfg)
+    for action in parser._actions:
+        if "--config" in action.option_strings:
+            action.required = False
+            break
     args = parser.parse_args(remaining)
     args.config = given.config
     args.stage = given.stage
@@ -121,17 +127,20 @@ def train_one_epoch(stage, ext_model, base_model, teacher, loader, optimizer, cr
 
 
 @torch.no_grad()
-def validate(stage, ext_model, base_model, teacher, loader, criterion, device):
+def validate(stage, ext_model, base_model, teacher, loader, criterion, device, align_divisor=256):
     ext_model.eval()
     meters = {k: AverageMeter() for k in ("loss", "bpp", "distortion")}
     for images in loader:
         images = images.to(device)
+        # Pad to codec/Swin-friendly size (same as train_taic.validate).
+        align = Alignment(divisor=align_divisor, mode="pad", padding_mode="constant").to(device)
+        x = align.align(images)
         if stage == 1:
-            out = ext_model(images, use_condition=False)
+            out = ext_model(x, use_condition=False)
         else:
-            y_b = encode_base_latent(base_model, images)
-            out = ext_model(images, y_b_hat=y_b, use_condition=True)
-        gt = teacher.gt_features(images)
+            y_b = encode_base_latent(base_model, x)
+            out = ext_model(x, y_b_hat=y_b, use_condition=True)
+        gt = teacher.gt_features(x)
         pred = teacher.pred_features(out["h"])
         N, _, H, W = images.shape
         stats = criterion(out, pred, gt, num_pixels=N * H * W)
@@ -198,7 +207,14 @@ def main(argv):
         f"Trainable params: {sum(p.numel() for p in net.parameters() if p.requires_grad)/1e6:.3f}M"
     )
 
-    teacher = build_teacher(ext_task, pretrained_backbone=getattr(args, "pretrained_backbone", True))
+    teacher = build_teacher(
+        ext_task,
+        pretrained_backbone=getattr(args, "pretrained_backbone", True),
+        use_official_teacher=getattr(args, "use_official_teacher", True),
+        task_config=getattr(args, "task_config", None),
+        task_checkpoint=getattr(args, "task_checkpoint", None),
+        device=device,
+    )
     teacher = teacher.to(device).eval()
 
     if args.cuda and torch.cuda.device_count() > 1:

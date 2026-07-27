@@ -21,6 +21,41 @@ import torch.nn.functional as F
 
 from flexicm.tasks.losses import freeze_module
 from flexicm.tasks.swin_teacher import SwinStageTeacher
+from flexicm.tasks.official_teachers import OfficialHRNetTeacher, OfficialSwinTeacher
+
+# Default official task-network assets (used when use_official_teacher=True)
+DEFAULT_TEACHER_ASSETS = {
+    "detection": {
+        "task_config": "configs/task_networks/cascade_mask_rcnn_swin_base_coco.py",
+        "task_checkpoint": "checkpoints/task_networks/detection/model_mmdet3.pth",
+        "framework": "mmdet",
+        "align_mode": "fpn",
+    },
+    "instance": {
+        "task_config": "configs/task_networks/cascade_mask_rcnn_swin_base_coco.py",
+        "task_checkpoint": "checkpoints/task_networks/instance/model_mmdet3.pth",
+        "framework": "mmdet",
+        "align_mode": "fpn",
+    },
+    "semantic": {
+        "task_config": "checkpoints/task_networks/semantic/swin-base-patch4-window7-in22k-pre_upernet_8xb2-160k_ade20k-512x512.py",
+        "task_checkpoint": "checkpoints/task_networks/semantic/upernet_swin_base_patch4_window7_512x512_160k_ade20k_pretrain_224x224_22K_20210526_211650-762e2178.pth",
+        "framework": "mmseg",
+        "align_mode": "fpn",
+    },
+    "panoptic": {
+        "task_config": "checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic.py",
+        "task_checkpoint": "checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic_20220329_230021-05ec7315.pth",
+        "framework": "mmdet",
+        "align_mode": "stages",
+    },
+    "pose": {
+        "task_config": "checkpoints/task_networks/pose/ae_hrnet-w32_8xb24-300e_coco-512x512.py",
+        "task_checkpoint": "checkpoints/task_networks/pose/hrnet_w32_coco_512x512-bcb8c247_20200816.pth",
+        "framework": "mmpose",
+        "align_mode": "stages",
+    },
+}
 
 
 class DetectionTeacher(nn.Module):
@@ -179,15 +214,64 @@ class HigherHRNetTeacher(nn.Module):
 def build_teacher(task: str, **kwargs) -> nn.Module:
     task = task.lower()
     pretrained = kwargs.pop("pretrained_backbone", kwargs.pop("pretrained", True))
-    if task in ("detection", "object_detection", "det"):
+    use_official = kwargs.pop("use_official_teacher", True)
+    task_config = kwargs.pop("task_config", None)
+    task_checkpoint = kwargs.pop("task_checkpoint", None)
+    device = kwargs.pop("device", "cpu")
+
+    # Normalize aliases
+    alias = {
+        "object_detection": "detection",
+        "det": "detection",
+        "instance_seg": "instance",
+        "instance_segmentation": "instance",
+        "semantic_seg": "semantic",
+        "semantic_segmentation": "semantic",
+        "panoptic_seg": "panoptic",
+        "panoptic_segmentation": "panoptic",
+        "pose_estimation": "pose",
+    }
+    task = alias.get(task, task)
+
+    if use_official:
+        assets = DEFAULT_TEACHER_ASSETS.get(task)
+        if assets is None:
+            raise ValueError(f"Unknown task for official teacher: {task}")
+        cfg = task_config or assets["task_config"]
+        ckpt = task_checkpoint or assets["task_checkpoint"]
+        align_mode = kwargs.pop("align_mode", assets["align_mode"])
+        framework = assets["framework"]
+        if framework in ("mmdet", "mmseg"):
+            teacher = OfficialSwinTeacher(
+                config_path=cfg,
+                checkpoint_path=ckpt,
+                align_mode=align_mode,
+                framework=framework,
+                device=device,
+            )
+            freeze_module(teacher)
+            return teacher
+        if framework == "mmpose":
+            width = kwargs.pop("width", 32)
+            teacher = OfficialHRNetTeacher(
+                config_path=cfg,
+                checkpoint_path=ckpt,
+                device=device,
+                width=width,
+            )
+            freeze_module(teacher)
+            return teacher
+
+    # Legacy timm / in-repo teachers (ImageNet Swin / stem HRNet)
+    if task == "detection":
         return DetectionTeacher(task="detection", pretrained_backbone=pretrained, **kwargs)
-    if task in ("instance", "instance_seg", "instance_segmentation"):
+    if task == "instance":
         return DetectionTeacher(task="instance", pretrained_backbone=pretrained, **kwargs)
-    if task in ("semantic", "semantic_seg", "semantic_segmentation"):
+    if task == "semantic":
         return SemanticSegTeacher(pretrained_backbone=pretrained, **kwargs)
-    if task in ("panoptic", "panoptic_seg", "panoptic_segmentation"):
+    if task == "panoptic":
         return PanopticSegTeacher(pretrained_backbone=pretrained, **kwargs)
-    if task in ("pose", "pose_estimation"):
+    if task == "pose":
         return HigherHRNetTeacher(pretrained=pretrained, **kwargs)
     raise ValueError(f"Unknown task: {task}")
 

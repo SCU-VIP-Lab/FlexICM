@@ -49,7 +49,12 @@ def parse_args(argv):
     given, remaining = parser.parse_known_args(argv)
     cfg_path = given.config if os.path.isabs(given.config) else os.path.join(REPO_ROOT, given.config)
     cfg = load_yaml_config(cfg_path)
-    parser.set_defaults(**cfg)
+    # -c already consumed by the first parse; keep it as a default for the second pass
+    parser.set_defaults(config=cfg_path, **cfg)
+    for action in parser._actions:
+        if "--config" in action.option_strings:
+            action.required = False
+            break
     parser.add_argument("--actual-bpp", action="store_true")
     parser.add_argument("--no-condition", action="store_true")
     parser.add_argument("--with-metrics", action="store_true")
@@ -139,7 +144,14 @@ def main(argv):
     net.load_state_dict(state, strict=False)
     net.eval()
 
-    teacher = build_teacher(ext_task, pretrained_backbone=getattr(args, "pretrained_backbone", True))
+    teacher = build_teacher(
+        ext_task,
+        pretrained_backbone=getattr(args, "pretrained_backbone", True),
+        use_official_teacher=getattr(args, "use_official_teacher", True),
+        task_config=getattr(args, "task_config", None),
+        task_checkpoint=getattr(args, "task_checkpoint", None),
+        device=device,
+    )
     teacher = teacher.to(device).eval()
     criterion = TAICCriterion(lmbda=lmbda, align_mode=align_mode)
     codec_loader = build_codec_loader(args, ext_task, device)

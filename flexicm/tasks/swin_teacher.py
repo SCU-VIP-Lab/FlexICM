@@ -55,12 +55,16 @@ def build_swin_backbone(pretrained: bool = True, swin_variant: str = "base"):
     if key not in _SWIN_TIMM_NAMES:
         raise ValueError(f"Unknown swin_variant={swin_variant!r}; expected one of {list(_SWIN_TIMM_NAMES)}")
 
+    # Training uses 256x256 crops; validation pads to multiples of 256.
+    # Allow variable spatial sizes (do not hard-lock PatchEmbed to 224).
     model = timm.create_model(
         _SWIN_TIMM_NAMES[key],
         pretrained=pretrained,
         features_only=True,
         out_indices=(0, 1, 2, 3),
-        img_size=224,
+        img_size=256,
+        dynamic_img_size=True,
+        strict_img_size=False,
     )
     return model
 

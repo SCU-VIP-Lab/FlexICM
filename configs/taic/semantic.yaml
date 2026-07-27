@@ -1,7 +1,7 @@
 root: "logs"
 exp_name: "taic_semantic"
 task: "semantic"
-dataset_path: "/data/coco2017"
+dataset_path: "/data/Dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 checkpoint: null
 epochs: 35
@@ -19,3 +19,8 @@ seed: 42
 pretrained_backbone: true
 out_channels: 128
 align_mode: "fpn"
+
+# Official task-network teacher (backbone/neck) for feature alignment D
+use_official_teacher: true
+task_config: "./checkpoints/task_networks/semantic/swin-base-patch4-window7-in22k-pre_upernet_8xb2-160k_ade20k-512x512.py"
+task_checkpoint: "./checkpoints/task_networks/semantic/upernet_swin_base_patch4_window7_512x512_160k_ade20k_pretrain_224x224_22K_20210526_211650-762e2178.pth"

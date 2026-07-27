@@ -2,17 +2,18 @@
 root: "logs"
 exp_name: "taic_detection"
 task: "detection"
-dataset_path: "/data/coco2017"
+dataset_path: "/data/Dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"  # quality matches lmbda mapping
-checkpoint: null
-epochs: 35
+checkpoint: null # "./logs/taic_detection/1/checkpoint_60.pth.tar"
+freeze_base_codec: false  # false = fine-tune the entire TIC + SFMA + Task Connector
+epochs: 999
 learning_rate: 1.0e-4
 gpu_id: 0
 quality_level: 1
 # paper lambda set: {0.0035, 0.0067, 0.0130, 0.0250}
-lmbda: 0.0035
+lmbda: 0.2050
 num_workers: 8
-batch_size: 80
+batch_size: 32
 test_batch_size: 1
 patch_size: 256
 cuda: true
@@ -21,3 +22,8 @@ seed: 42
 pretrained_backbone: true
 out_channels: 128
 align_mode: "fpn"
+
+# Official task-network teacher (backbone/neck) for feature alignment D
+use_official_teacher: true
+task_config: "./configs/task_networks/cascade_mask_rcnn_swin_base_coco.py"
+task_checkpoint: "./checkpoints/task_networks/detection/model_mmdet3.pth"

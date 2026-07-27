@@ -93,13 +93,13 @@ def test_taic_loader(
         N, _, H, W = images.shape
         num_pixels = N * H * W
 
+        # Keep codec + teacher on the padded grid so Swin always sees a
+        # patch/window-divisible size. bpp still uses the original pixel count.
         x, _ = pad_for_codec(images, divisor=align_divisor, device=device)
         out = model(x)
-        h = crop_feature_to_image(out["h"], (H, W))
-        out["h"] = h
 
-        gt = teacher.gt_features(images)
-        pred = teacher.pred_features(h)
+        gt = teacher.gt_features(x)
+        pred = teacher.pred_features(out["h"])
         stats = criterion(out, pred, gt, num_pixels=num_pixels)
 
         meters["loss"].update(stats["loss"].item(), n=N)
@@ -170,6 +170,7 @@ def test_ctaic_loader(
         N, _, H, W = images.shape
         num_pixels = N * H * W
 
+        # Keep codec + teacher on the padded grid (same rationale as TAIC test).
         x, _ = pad_for_codec(images, divisor=align_divisor, device=device)
         y_b = None
         if use_condition:
@@ -177,11 +178,9 @@ def test_ctaic_loader(
             y_b = base_out["y_hat"]
 
         out = ext_model(x, y_b_hat=y_b, use_condition=use_condition and y_b is not None)
-        h = crop_feature_to_image(out["h"], (H, W))
-        out["h"] = h
 
-        gt = teacher.gt_features(images)
-        pred = teacher.pred_features(h)
+        gt = teacher.gt_features(x)
+        pred = teacher.pred_features(out["h"])
         stats = criterion(out, pred, gt, num_pixels=num_pixels)
 
         meters["loss"].update(stats["loss"].item(), n=N)

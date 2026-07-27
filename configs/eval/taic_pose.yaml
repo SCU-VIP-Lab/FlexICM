@@ -1,6 +1,6 @@
 # TAIC eval: codec test + optional --with-metrics
 task: "pose"
-dataset_path: "/data/coco2017"
+dataset_path: "/data/Dataset/coco2017"
 split: "val2017"
 ann_file: "annotations/coco_wholebody_val_v1.0.json"
 quality_level: 1
@@ -8,10 +8,13 @@ lmbda: 0.0035
 checkpoint: "./checkpoints/taic/pose/1/checkpoint_best_loss.pth.tar"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 # official task network (required for --with-metrics)
-task_config: "./configs/task_networks/higherhrnet_w32_coco_wholebody.py"
-task_checkpoint: "./checkpoints/task_networks/pose/model.pth"
 gpu_id: 0
 cuda: true
 test_batch_size: 1
 num_workers: 4
 pretrained_backbone: true
+
+# Official task-network teacher (backbone/neck) for feature alignment D
+use_official_teacher: true
+task_config: "./checkpoints/task_networks/pose/ae_hrnet-w32_8xb24-300e_coco-512x512.py"
+task_checkpoint: "./checkpoints/task_networks/pose/hrnet_w32_coco_512x512-bcb8c247_20200816.pth"

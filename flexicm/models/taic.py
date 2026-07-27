@@ -374,7 +374,7 @@ class TAIC(nn.Module):
             ["_quantized_cdf", "_offset", "_cdf_length", "scale_table"],
             state_dict,
         )
-        super().load_state_dict(state_dict, strict=strict)
+        return super().load_state_dict(state_dict, strict=strict)
 
     def load_base_codec(self, state_dict, strict=False):
         """Load pretrained TIC / TIC-SFMA weights into matching modules."""

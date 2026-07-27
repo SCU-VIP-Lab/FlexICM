@@ -2,7 +2,7 @@
 root: "logs"
 exp_name: "ctaic_s1"
 scenario: "s1"
-dataset_path: "/data/coco2017"
+dataset_path: "/data/Dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 # trained base-layer TAIC for detection (provides y_b_hat)
 base_taic_checkpoint: "./checkpoints/taic/detection/1/checkpoint_best_loss.pth.tar"
@@ -24,3 +24,8 @@ seed: 42
 pretrained_backbone: true
 out_channels: 128  # extension = Cascade Mask R-CNN + Swin-B
 align_mode: "fpn"
+
+# Official task-network teacher (backbone/neck) for feature alignment D
+use_official_teacher: true
+task_config: "./configs/task_networks/cascade_mask_rcnn_swin_base_coco.py"
+task_checkpoint: "./checkpoints/task_networks/instance/model_mmdet3.pth"

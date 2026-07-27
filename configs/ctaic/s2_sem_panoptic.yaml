@@ -2,7 +2,7 @@
 root: "logs"
 exp_name: "ctaic_s2"
 scenario: "s2"
-dataset_path: "/data/coco2017"
+dataset_path: "/data/Dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 base_taic_checkpoint: "./checkpoints/taic/semantic/1/checkpoint_best_loss.pth.tar"
 taic_init: "./checkpoints/taic/panoptic/1/checkpoint_best_loss.pth.tar"
@@ -20,3 +20,8 @@ cuda: true
 save: true
 seed: 42
 pretrained_backbone: true
+
+# Official task-network teacher (backbone/neck) for feature alignment D
+use_official_teacher: true
+task_config: "./checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic.py"
+task_checkpoint: "./checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic_20220329_230021-05ec7315.pth"

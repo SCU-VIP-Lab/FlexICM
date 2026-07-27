@@ -73,7 +73,10 @@ def run_task_metric_eval(
                 else:
                     out = codec(x)
 
-            h = crop_feature_to_image(out["h"], (H, W))
+            h = out["h"]
+            meta = dict(meta)
+            meta["pad_height"] = int(x.shape[-2])
+            meta["pad_width"] = int(x.shape[-1])
             pred = runner.predict_from_h(h, meta)
             predictions.append(pred)
 

@@ -85,7 +85,9 @@ def _require_mmpose():
 def swin_feats_from_h(backbone: nn.Module, h: torch.Tensor) -> Tuple[torch.Tensor, ...]:
     """Treat h as Swin F1 (stage-0 output) and run remaining stages.
 
-    Compatible with MMDet/MMSeg SwinTransformer that exposes `.stages` / `.layers`.
+    Compatible with:
+      - MMDet 3.x SwinTransformer (token + hw_shape API, ``stages``)
+      - older Swin / MMSeg variants that expose ``stages`` / ``layers``
     """
     stages = None
     for name in ("stages", "layers"):
@@ -95,36 +97,77 @@ def swin_feats_from_h(backbone: nn.Module, h: torch.Tensor) -> Tuple[torch.Tenso
     if stages is None:
         raise RuntimeError("Backbone has no stages/layers; cannot inject h as F1")
 
+    # h is NCHW (B,C,H,W) == F1
+    if h.dim() != 4:
+        raise ValueError(f"expected NCHW h, got shape {tuple(h.shape)}")
+    B, C, H, W = h.shape
     outs = [h]
+
+    # Detect mmdet3-style SwinBlockSequence: forward(x, hw_shape)
+    import inspect
+
+    try:
+        needs_hw = "hw_shape" in inspect.signature(stages[0].forward).parameters
+    except (TypeError, ValueError):
+        needs_hw = False
+
+    if needs_hw:
+        # tokens: (B, H*W, C)
+        x = h.flatten(2).transpose(1, 2).contiguous()
+        hw_shape = (H, W)
+
+        # F1 is stage-0 block output (pre-downsample). Feed stage-0 downsample
+        # then run stages 1..N-1, mirroring SwinTransformer.forward.
+        if getattr(stages[0], "downsample", None) is not None:
+            x, hw_shape = stages[0].downsample(x, hw_shape)
+
+        for i in range(1, len(stages)):
+            x, hw_shape, out, out_hw_shape = stages[i](x, hw_shape)
+            norm_name = f"norm{i}"
+            if hasattr(backbone, norm_name):
+                out = getattr(backbone, norm_name)(out)
+            feat_dim = out.shape[-1]
+            out = (
+                out.view(B, out_hw_shape[0], out_hw_shape[1], feat_dim)
+                .permute(0, 3, 1, 2)
+                .contiguous()
+            )
+            outs.append(out)
+
+        # Optionally normalize F1 with norm0 for consistency with extract_feat
+        if hasattr(backbone, "norm0"):
+            f1 = h.flatten(2).transpose(1, 2).contiguous()
+            f1 = backbone.norm0(f1)
+            outs[0] = (
+                f1.view(B, H, W, C).permute(0, 3, 1, 2).contiguous()
+            )
+        return tuple(outs)
+
+    # Legacy path (timm / older mmdet): stage modules accept NCHW / plain tensors
     x = h
-    # Stage 0 already produced F1 (=h); run stages 1..N-1
     for i in range(1, len(stages)):
         x = stages[i](x)
         if isinstance(x, (tuple, list)):
             x = x[0]
-        # MMDet Swin may return NCHW already
-        if x.dim() == 4 and x.shape[1] < x.shape[-1] and x.shape[-1] in (96, 128, 192, 256, 384, 512, 768, 1024):
-            # likely NHWC
+        if x.dim() == 4 and x.shape[1] < x.shape[-1] and x.shape[-1] in (
+            96, 128, 192, 256, 384, 512, 768, 1024
+        ):
             x = x.permute(0, 3, 1, 2).contiguous()
         outs.append(x)
 
-    # Apply per-stage norms if present (mmdet Swin)
     if hasattr(backbone, "num_features") or hasattr(backbone, "out_indices"):
         norm_outs = []
         for i, out in enumerate(outs):
             norm_name = f"norm{i}"
             if hasattr(backbone, norm_name):
                 nchw = out
-                # LayerNorm over channel last in some impls
                 norm = getattr(backbone, norm_name)
-                if nchw.shape[1] == getattr(norm, "normalized_shape", [nchw.shape[1]])[0] if hasattr(norm, "normalized_shape") else True:
-                    # try NCHW LayerNorm via transpose
-                    try:
-                        y = nchw.permute(0, 2, 3, 1)
-                        y = norm(y)
-                        nchw = y.permute(0, 3, 1, 2).contiguous()
-                    except Exception:
-                        nchw = out
+                try:
+                    y = nchw.permute(0, 2, 3, 1)
+                    y = norm(y)
+                    nchw = y.permute(0, 3, 1, 2).contiguous()
+                except Exception:
+                    nchw = out
                 norm_outs.append(nchw)
             else:
                 norm_outs.append(out)
@@ -149,39 +192,39 @@ class DetectionMetricRunner(TaskMetricRunner):
     @torch.no_grad()
     def predict_from_h(self, h: torch.Tensor, img_meta: Dict[str, Any]) -> Dict[str, Any]:
         assert self.model is not None
-        # h: 1xCx(H/4)x(W/4)
+        # h: 1xCx(H/4)x(W/4) — preferably on the padded codec grid
         backbone = self.model.backbone
         feats = swin_feats_from_h(backbone, h)
         if hasattr(self.model, "neck") and self.model.neck is not None:
             feats = self.model.neck(feats)
 
         # Build a minimal img_metas / data_samples for mmdet 3.x or 2.x
-        H, W = int(img_meta["height"]), int(img_meta["width"])
+        ori_h, ori_w = int(img_meta["height"]), int(img_meta["width"])
+        # If h comes from a padded codec input, prefer those spatial sizes so
+        # FPN strides line up; boxes are rescaled back to ori_shape.
+        pad_h = int(img_meta.get("pad_height", h.shape[-2] * 4))
+        pad_w = int(img_meta.get("pad_width", h.shape[-1] * 4))
         try:
             # MMDet 3.x style
             from mmdet.structures import DetDataSample
-            from mmengine.structures import InstanceData
 
             data_sample = DetDataSample()
             data_sample.set_metainfo(
                 dict(
-                    img_shape=(H, W),
-                    ori_shape=(H, W),
-                    pad_shape=(H, W),
+                    img_shape=(pad_h, pad_w),
+                    ori_shape=(ori_h, ori_w),
+                    pad_shape=(pad_h, pad_w),
                     scale_factor=(1.0, 1.0),
                     img_id=img_meta.get("image_id"),
                 )
             )
-            # Use RPN + ROI heads with injected feats
-            if hasattr(self.model, "extract_feat"):
-                # bypass extract_feat by calling predict with feats if supported
-                pass
             rpn_results_list = self.model.rpn_head.predict(feats, [data_sample], rescale=False)
             results_list = self.model.roi_head.predict(
                 feats, rpn_results_list, [data_sample], rescale=True
             )
             pred = results_list[0]
-            inst = pred.pred_instances
+            # mmdet 3.x roi_head.predict may return DetDataSample or InstanceData
+            inst = pred.pred_instances if hasattr(pred, "pred_instances") else pred
             out = {
                 "image_id": img_meta["image_id"],
                 "bboxes": inst.bboxes.detach().cpu(),
@@ -195,9 +238,9 @@ class DetectionMetricRunner(TaskMetricRunner):
             # Fallback MMDet 2.x
             img_metas = [
                 dict(
-                    img_shape=(H, W, 3),
-                    ori_shape=(H, W, 3),
-                    pad_shape=(H, W, 3),
+                    img_shape=(pad_h, pad_w, 3),
+                    ori_shape=(ori_h, ori_w, 3),
+                    pad_shape=(pad_h, pad_w, 3),
                     scale_factor=1.0,
                     flip=False,
                 )

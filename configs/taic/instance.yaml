@@ -2,7 +2,7 @@
 root: "logs"
 exp_name: "taic_instance"
 task: "instance"
-dataset_path: "/data/coco2017"
+dataset_path: "/data/Dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 checkpoint: null
 epochs: 35
@@ -20,3 +20,8 @@ seed: 42
 pretrained_backbone: true
 out_channels: 128  # Cascade Mask R-CNN + Swin-B F1
 align_mode: "fpn"
+
+# Official task-network teacher (backbone/neck) for feature alignment D
+use_official_teacher: true
+task_config: "./configs/task_networks/cascade_mask_rcnn_swin_base_coco.py"
+task_checkpoint: "./checkpoints/task_networks/instance/model_mmdet3.pth"

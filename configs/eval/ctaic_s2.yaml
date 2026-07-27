@@ -1,5 +1,5 @@
 scenario: "s2"
-dataset_path: "/data/coco2017"
+dataset_path: "/data/Dataset/coco2017"
 split: "val2017"
 ann_file: "annotations/panoptic_val2017.json"
 quality_level: 1
@@ -7,11 +7,14 @@ lmbda: 0.0035
 checkpoint: "./checkpoints/ctaic/s2_sem_panoptic/stage2/1/checkpoint_best_loss.pth.tar"
 base_taic_checkpoint: "./checkpoints/taic/semantic/1/checkpoint_best_loss.pth.tar"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
-task_config: "./configs/task_networks/maskformer_swin-b_coco.py"
-task_checkpoint: "./checkpoints/task_networks/panoptic/model.pth"
 panoptic_gt_folder: "/data/coco2017/annotations/panoptic_val2017"
 gpu_id: 0
 cuda: true
 test_batch_size: 1
 num_workers: 4
 pretrained_backbone: true
+
+# Official task-network teacher (backbone/neck) for feature alignment D
+use_official_teacher: true
+task_config: "./checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic.py"
+task_checkpoint: "./checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic_20220329_230021-05ec7315.pth"
