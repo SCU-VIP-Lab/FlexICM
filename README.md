@@ -344,43 +344,13 @@ stage1_checkpoint:     # Stage-1 result loaded in Stage 2
 
 Download pretrained TAIC / C-TAIC checkpoints from: https://huggingface.co/SCU-VIP-Lab/FlexICM
 
-Codec test measures **compression statistics**:
-
-
-| Metric       | Meaning                                                           |
-| ------------ | ----------------------------------------------------------------- |
-| `bpp`        | Likelihood bitrate R                                              |
-| `distortion` | Feature alignment D (Eq. 2 or Eq. 3)                              |
-| `loss`       | R + \lambda D                                                     |
-| `actual_bpp` | Optional: real bitstream size after `compress()` / `decompress()` |
-
-
-For C-TAIC, reported `bpp` is **extension-layer only** (base-layer rate is excluded), matching the paper.
-
-### Prepare codec checkpoints
-
-1. Copy trained weights into `checkpoints/taic/` or `checkpoints/ctaic/` (see `checkpoints/README.md`)
-2. Remove the local `PLACEHOLDER` once `checkpoint_best_loss.pth.tar` is present
-3. Edit `dataset_path` / `gpu_id` in `configs/eval/*.yaml`
-
-```bash
-python scripts/eval_taic.py -c configs/eval/taic_detection.yaml
-python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml
-```
-
----
-
-
-
-## Task-network metric evaluation
-
 To reproduce paper rate–accuracy numbers you must **also** load the official pretrained
 **task networks** and run metrics on COCO val:
 
 
 | Task      | Task network                 | Metric   |
 | --------- | ---------------------------- | -------- |
-| Detection | Cascade Mask R-CNN + Swin-B  | mAP-bbox |
+| Detection | Faster R-CNN + Swin-B  | mAP-bbox |
 | Instance  | Cascade Mask R-CNN + Swin-B  | mAP-mask |
 | Semantic  | UPerNet + Swin-B             | mIoU     |
 | Panoptic  | MaskFormer + Swin-B          | PQ       |
