@@ -247,7 +247,6 @@ class OfficialHRNetTeacher(nn.Module):
         super().__init__()
         self.config_path = _resolve_path(config_path)
         self.checkpoint_path = _resolve_path(checkpoint_path)
-        self.backbone_only = backbone_only
         if not self.config_path or not os.path.isfile(self.config_path):
             raise FileNotFoundError(f"task_config not found: {config_path}")
         if not self.checkpoint_path or not os.path.isfile(self.checkpoint_path):

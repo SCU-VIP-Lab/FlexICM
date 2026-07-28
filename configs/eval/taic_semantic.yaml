@@ -1,11 +1,12 @@
 # TAIC eval: codec test + optional --with-metrics
+# Checkpoint path is derived from quality_level:
+#   ./checkpoints/taic/{task}/{quality_level}/checkpoint_best_loss.pth.tar
 task: "semantic"
 dataset_path: "/data/Dataset/coco2017"
 split: "val2017"
 ann_file: "annotations/panoptic_val2017.json"
 quality_level: 1
 lmbda: 0.0035
-checkpoint: "./checkpoints/taic/semantic/1/checkpoint_best_loss.pth.tar"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 # official task network (required for --with-metrics)
 gpu_id: 0

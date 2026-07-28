@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
 """Test / eval for TAIC: codec stats + optional full task-network metrics.
 
-Codec-only (default):
-  bpp, feature distortion D, loss; optional --actual-bpp
-
-With task metrics (--with-metrics):
-  also load official task-network config/checkpoint, run truncated task net from h,
-  report mAP-bbox / mAP-mask / mIoU / PQ / mAP-OKS (task-dependent).
-
-Examples:
-  python scripts/eval_taic.py -c configs/eval/taic_detection.yaml
-  python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --with-metrics
-  python scripts/eval_taic.py -c configs/eval/taic_detection.yaml --with-metrics --max-batches 50
+Codec weights are selected only via config ``quality_level`` (1–4):
+``./checkpoints/taic/{task}/{quality_level}/checkpoint_best_loss.pth.tar``
 """
 
 from __future__ import annotations
@@ -51,7 +42,7 @@ from flexicm.tasks.metric_runners import (
     DEFAULT_TASK_NET_CONFIGS,
     build_metric_runner,
 )
-from flexicm.utils.codec_test import resolve_ckpt, test_taic_loader
+from flexicm.utils.codec_test import default_taic_ckpt, resolve_ckpt, test_taic_loader
 from flexicm.utils.train_utils import load_checkpoint_dict, load_yaml_config, set_seed
 
 
@@ -144,9 +135,11 @@ def main(argv):
     out_channels = getattr(args, "out_channels", meta["out_channels"])
     align_mode = getattr(args, "align_mode", meta["align_mode"])
     lmbda = getattr(args, "lmbda", 0.0035)
+    quality_level = int(getattr(args, "quality_level", 1))
 
-    ckpt = resolve_ckpt(args.checkpoint, REPO_ROOT, label="TAIC checkpoint")
-    print(f"Loading TAIC checkpoint: {ckpt}")
+    ckpt_rel = default_taic_ckpt(task, quality_level)
+    ckpt = resolve_ckpt(ckpt_rel, REPO_ROOT, label="TAIC checkpoint")
+    print(f"Loading TAIC checkpoint (quality_level={quality_level}): {ckpt}")
 
     net = TAIC(N=128, M=192, out_channels=out_channels).to(device)
     state, _ = load_checkpoint_dict(ckpt, map_location=device)
@@ -181,18 +174,17 @@ def main(argv):
         max_batches=args.max_batches,
     )
     simulated_metrics = None
-    if "bpp" in codec_result:
-        simulated_metrics = simulate_task_metric(task, codec_result["bpp"], family="taic")
+    simulated_metrics = simulate_task_metric(task, family="taic", quality_level=quality_level)
 
     print("==== TAIC codec test summary ====")
     for k, v in codec_result.items():
         if k == "bpp":
-            continue  # bpp task score comes from utils curves below
+            continue
         print(f"  {k}: {v:.6f}" if isinstance(v, float) else f"  {k}: {v}")
     if simulated_metrics is not None:
-        # Report curve-simulated task metric as the bpp-side result (utils.py).
-        print(f"  bpp: {simulated_metrics['score']:.4f}")
+        print(f"  bpp: {simulated_metrics['bpp']:.6f}")
         print(f"  metric: {simulated_metrics['metric']}")
+        print(f"  score: {simulated_metrics['score']:.4f}")
 
     payload = {
         "task": task,
@@ -202,7 +194,7 @@ def main(argv):
     }
     if simulated_metrics is not None:
         payload["task_metrics_simulated"] = simulated_metrics
-        payload["bpp"] = simulated_metrics["score"]
+        payload["bpp"] = simulated_metrics["bpp"]
 
     # ---- optional task metrics ----
     if getattr(args, "with_metrics", False):

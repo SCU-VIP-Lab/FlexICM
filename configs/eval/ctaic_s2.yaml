@@ -1,11 +1,12 @@
+# C-TAIC eval. Codec checkpoints are derived from quality_level:
+#   extension: ./checkpoints/ctaic/s2_sem_panoptic/stage2/{quality_level}/checkpoint_best_loss.pth.tar
+#   base TAIC: ./checkpoints/taic/semantic/{quality_level}/checkpoint_best_loss.pth.tar
 scenario: "s2"
 dataset_path: "/data/Dataset/coco2017"
 split: "val2017"
 ann_file: "annotations/panoptic_val2017.json"
 quality_level: 1
 lmbda: 0.0035
-checkpoint: "./checkpoints/ctaic/s2_sem_panoptic/stage2/1/checkpoint_best_loss.pth.tar"
-base_taic_checkpoint: "./checkpoints/taic/semantic/1/checkpoint_best_loss.pth.tar"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 panoptic_gt_folder: "/data/coco2017/annotations/panoptic_val2017"
 gpu_id: 0

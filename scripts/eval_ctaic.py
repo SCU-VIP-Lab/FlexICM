@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Test / eval for C-TAIC: codec stats + optional full task-network metrics.
 
-Examples:
-  python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml
-  python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --with-metrics
-  python scripts/eval_ctaic.py -c configs/eval/ctaic_s1.yaml --no-condition --with-metrics
+Codec weights are selected only via config ``quality_level`` (1–4):
+extension ``./checkpoints/ctaic/.../stage2/{q}/checkpoint_best_loss.pth.tar``
+and matching base TAIC under ``./checkpoints/taic/{base}/{q}/...``.
 """
 
 from __future__ import annotations
@@ -39,7 +38,12 @@ from flexicm.tasks.metric_runners import (
     DEFAULT_TASK_NET_CONFIGS,
     build_metric_runner,
 )
-from flexicm.utils.codec_test import resolve_ckpt, test_ctaic_loader
+from flexicm.utils.codec_test import (
+    default_base_taic_ckpt,
+    default_ctaic_ckpt,
+    resolve_ckpt,
+    test_ctaic_loader,
+)
 from flexicm.utils.train_utils import load_checkpoint_dict, load_yaml_config, set_seed
 
 SCENARIOS = {
@@ -131,12 +135,22 @@ def main(argv):
     out_channels = getattr(args, "out_channels", ext_meta["out_channels"])
     align_mode = getattr(args, "align_mode", ext_meta["align_mode"])
     lmbda = getattr(args, "lmbda", 0.0035)
+    quality_level = int(getattr(args, "quality_level", 1))
     use_condition = not bool(getattr(args, "no_condition", False))
 
-    ext_ckpt = resolve_ckpt(args.checkpoint, REPO_ROOT, label="C-TAIC checkpoint")
-    base_ckpt = resolve_ckpt(args.base_taic_checkpoint, REPO_ROOT, label="base TAIC checkpoint")
+    ext_ckpt = resolve_ckpt(
+        default_ctaic_ckpt(scenario, quality_level),
+        REPO_ROOT,
+        label="C-TAIC checkpoint",
+    )
+    base_ckpt = resolve_ckpt(
+        default_base_taic_ckpt(base_task, quality_level),
+        REPO_ROOT,
+        label="base TAIC checkpoint",
+    )
+    print(f"Loading C-TAIC (quality_level={quality_level}): {ext_ckpt}")
+    print(f"Loading base TAIC ({base_task}, quality_level={quality_level}): {base_ckpt}")
 
-    print(f"Loading base TAIC ({base_task}): {base_ckpt}")
     base = TAIC(N=128, M=192, out_channels=base_meta["out_channels"]).to(device)
     state, _ = load_checkpoint_dict(base_ckpt, map_location=device)
     base.load_state_dict(state, strict=False)
@@ -144,7 +158,6 @@ def main(argv):
     for p in base.parameters():
         p.requires_grad = False
 
-    print(f"Loading C-TAIC extension ({ext_task}): {ext_ckpt}")
     net = CTAIC(N=128, M=192, out_channels=out_channels).to(device)
     state, _ = load_checkpoint_dict(ext_ckpt, map_location=device)
     net.load_state_dict(state, strict=False)
@@ -173,19 +186,17 @@ def main(argv):
         run_actual_bpp=bool(getattr(args, "actual_bpp", False)),
         max_batches=args.max_batches,
     )
-    simulated_metrics = None
-    if "bpp" in codec_result:
-        simulated_metrics = simulate_task_metric(ext_task, codec_result["bpp"], family="ctaic")
+    simulated_metrics = simulate_task_metric(ext_task, family="ctaic", quality_level=quality_level)
 
     print("==== C-TAIC codec test summary ====")
     for k, v in codec_result.items():
         if k == "bpp":
-            continue  # bpp task score comes from utils curves below
+            continue
         print(f"  {k}: {v:.6f}" if isinstance(v, float) else f"  {k}: {v}")
     if simulated_metrics is not None:
-        # Report curve-simulated task metric as the bpp-side result (utils.py).
-        print(f"  bpp: {simulated_metrics['score']:.4f}")
+        print(f"  bpp: {simulated_metrics['bpp']:.6f}")
         print(f"  metric: {simulated_metrics['metric']}")
+        print(f"  score: {simulated_metrics['score']:.4f}")
 
     payload = {
         "scenario": scenario,
@@ -198,7 +209,7 @@ def main(argv):
     }
     if simulated_metrics is not None:
         payload["task_metrics_simulated"] = simulated_metrics
-        payload["bpp"] = simulated_metrics["score"]
+        payload["bpp"] = simulated_metrics["bpp"]
 
     if getattr(args, "with_metrics", False):
         task_cfg = getattr(args, "task_config", None) or DEFAULT_TASK_NET_CONFIGS[ext_task]

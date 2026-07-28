@@ -31,6 +31,33 @@ def resolve_ckpt(path: str, repo_root: str, label: str = "checkpoint") -> str:
     return path
 
 
+# Eval checkpoint layout (quality_level selects the rate point 1..4):
+#   TAIC:  checkpoints/taic/{task}/{quality_level}/checkpoint_best_loss.pth.tar
+#   C-TAIC extension: checkpoints/ctaic/{scenario_dir}/stage2/{quality_level}/checkpoint_best_loss.pth.tar
+#   C-TAIC base TAIC: checkpoints/taic/{base_task}/{quality_level}/checkpoint_best_loss.pth.tar
+CTAIC_SCENARIO_DIRS = {
+    "s1": "s1_det_instance",
+    "s2": "s2_sem_panoptic",
+    "s3": "s3_det_pose",
+}
+
+
+def default_taic_ckpt(task: str, quality_level: int) -> str:
+    q = int(quality_level)
+    return f"./checkpoints/taic/{task}/{q}/checkpoint_best_loss.pth.tar"
+
+
+def default_ctaic_ckpt(scenario: str, quality_level: int) -> str:
+    q = int(quality_level)
+    scenario_dir = CTAIC_SCENARIO_DIRS[scenario]
+    return f"./checkpoints/ctaic/{scenario_dir}/stage2/{q}/checkpoint_best_loss.pth.tar"
+
+
+def default_base_taic_ckpt(base_task: str, quality_level: int) -> str:
+    q = int(quality_level)
+    return f"./checkpoints/taic/{base_task}/{q}/checkpoint_best_loss.pth.tar"
+
+
 def crop_feature_to_image(h: torch.Tensor, image_hw: Tuple[int, int]) -> torch.Tensor:
     """Crop decoded feature h (H/4, W/4 of padded input) to original image size / 4."""
     H, W = image_hw

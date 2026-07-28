@@ -1,10 +1,3 @@
----
-license: mit
-library_name: pytorch
-tags:
-  - compression
-  - detection
----
 
 # FlexICM: A Flexible Image Coding for Machines Framework
 
@@ -267,9 +260,9 @@ lmbda: 0.0035
 
 For each bitrate point, switch the matching `base_codec_k` and `lmbda`.
 
-Trained TAIC / C-TAIC weights for eval should be placed under `checkpoints/taic/` and
-`checkpoints/ctaic/` (see `checkpoints/README.md`). Until then, each quality folder
-contains a `PLACEHOLDER` file.
+Download pretrained TAIC / C-TAIC weights from Hugging Face and place them under
+`checkpoints/taic/` and `checkpoints/ctaic/` (see Codec Test). Eval only needs
+`quality_level: 1..4` — no manual codec `checkpoint` path.
 
 ---
 
@@ -344,6 +337,14 @@ stage1_checkpoint:     # Stage-1 result loaded in Stage 2
 
 Download pretrained TAIC / C-TAIC checkpoints from: https://huggingface.co/SCU-VIP-Lab/FlexICM
 
+Eval configs to set `quality_level` (1–4) 
+
+Example (`configs/eval/taic_detection.yaml`):
+
+```yaml
+quality_level: 2  
+```
+
 To reproduce paper rate–accuracy numbers you must **also** load the official pretrained
 **task networks** and run metrics on COCO val:
 
@@ -398,6 +399,8 @@ ann_file: "annotations/instances_val2017.json"
 
 ### Run codec + metrics
 
+Set `quality_level: 1..4` in the eval yaml (no `checkpoint` field). Example: `quality_level: 2`.
+
 ```bash
 python scripts/eval_taic.py -c configs/eval/taic_detection.yaml 
 python scripts/eval_taic.py -c configs/eval/taic_instance.yaml
@@ -411,8 +414,3 @@ python scripts/eval_ctaic.py -c configs/eval/ctaic_s3.yaml
 ```
 
 JSON results (codec + task metrics) are written under `logs/eval_taic/` or `logs/eval_ctaic/`.
-
-> Detection / instance metric paths are the most complete (COCO bbox via pycocotools).
-> Semantic mIoU needs a GT label loader; panoptic PQ needs `panopticapi` + GT folders;
-> pose-from-`h` may need a HigherHRNet stem hook for your exact MMPose version.
-

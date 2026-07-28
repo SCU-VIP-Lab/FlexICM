@@ -65,16 +65,49 @@ def _interp1d(xs: List[float], ys: List[float], x: float) -> float:
     return float(ys[-1])
 
 
-def simulate_task_metric(task: str, bpp: float, family: str = "taic") -> Optional[Dict[str, float]]:
+def simulate_task_metric(
+    task: str,
+    bpp: Optional[float] = None,
+    family: str = "taic",
+    quality_level: Optional[int] = None,
+) -> Optional[Dict[str, float]]:
+    """Look up / interpolate a paper RD-curve task score.
+
+    If ``quality_level`` is set (1-based, matching the 4 lambda / rate points),
+    return that discrete ``(bpp, score)`` from ``CURVES`` without interpolation.
+
+    Otherwise interpolate ``score`` from the measured ``bpp``.
+    """
     task = str(task).lower()
     family = str(family).lower()
     spec = CURVES.get(family, {}).get(task)
     if spec is None:
         return None
-    score = _interp1d(spec["bpp"], spec["score"], float(bpp))
+
+    xs = list(spec["bpp"])
+    ys = list(spec["score"])
+    if quality_level is not None:
+        idx = int(quality_level) - 1
+        if idx < 0 or idx >= len(xs):
+            raise ValueError(
+                f"quality_level={quality_level} out of range for {family}/{task} "
+                f"(valid: 1..{len(xs)})"
+            )
+        return {
+            "metric": spec["metric"],
+            "score": float(ys[idx]),
+            "bpp": float(xs[idx]),
+            "quality_level": int(quality_level),
+            "simulated": True,
+        }
+
+    if bpp is None:
+        return None
+    score = _interp1d(xs, ys, float(bpp))
     return {
         "metric": spec["metric"],
         "score": score,
+        "bpp": float(bpp),
         "bpp_input": float(bpp),
         "simulated": True,
     }
