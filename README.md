@@ -342,6 +342,8 @@ stage1_checkpoint:     # Stage-1 result loaded in Stage 2
 
 ## Codec Test
 
+Download pretrained TAIC / C-TAIC checkpoints from: https://huggingface.co/SCU-VIP-Lab/FlexICM
+
 Codec test measures **compression statistics**:
 
 
