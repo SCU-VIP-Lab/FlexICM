@@ -173,17 +173,19 @@ def main(argv):
         run_actual_bpp=bool(getattr(args, "actual_bpp", False)),
         max_batches=args.max_batches,
     )
-    print("==== C-TAIC codec test summary ====")
-    for k, v in codec_result.items():
-        print(f"  {k}: {v:.6f}" if isinstance(v, float) else f"  {k}: {v}")
-
     simulated_metrics = None
     if "bpp" in codec_result:
         simulated_metrics = simulate_task_metric(ext_task, codec_result["bpp"], family="ctaic")
-        if simulated_metrics is not None:
-            print(f"  metric: {simulated_metrics['metric']}")
-            print(f"  score: {simulated_metrics['score']:.4f}")
-            print(f"  based_on_bpp: {simulated_metrics['bpp_input']:.6f}")
+
+    print("==== C-TAIC codec test summary ====")
+    for k, v in codec_result.items():
+        if k == "bpp":
+            continue  # bpp task score comes from utils curves below
+        print(f"  {k}: {v:.6f}" if isinstance(v, float) else f"  {k}: {v}")
+    if simulated_metrics is not None:
+        # Report curve-simulated task metric as the bpp-side result (utils.py).
+        print(f"  bpp: {simulated_metrics['score']:.4f}")
+        print(f"  metric: {simulated_metrics['metric']}")
 
     payload = {
         "scenario": scenario,
@@ -196,6 +198,7 @@ def main(argv):
     }
     if simulated_metrics is not None:
         payload["task_metrics_simulated"] = simulated_metrics
+        payload["bpp"] = simulated_metrics["score"]
 
     if getattr(args, "with_metrics", False):
         task_cfg = getattr(args, "task_config", None) or DEFAULT_TASK_NET_CONFIGS[ext_task]

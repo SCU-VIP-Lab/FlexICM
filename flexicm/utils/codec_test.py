@@ -6,6 +6,7 @@ import os
 from typing import Dict, Optional, Tuple
 
 import torch
+from tqdm import tqdm
 
 from flexicm.utils.alignment import Alignment
 from flexicm.utils.train_utils import AverageMeter
@@ -86,7 +87,9 @@ def test_taic_loader(
     if run_actual_bpp:
         model.update(force=True)
 
-    for i, images in enumerate(loader):
+    total = len(loader) if max_batches is None else min(len(loader), max_batches)
+    pbar = tqdm(loader, total=total, desc="codec eval", leave=True)
+    for i, images in enumerate(pbar):
         if max_batches is not None and i >= max_batches:
             break
         images = images.to(device)
@@ -119,15 +122,6 @@ def test_taic_loader(
             except Exception as e:
                 if i == 0:
                     print(f"[warn] actual bpp / compress-decompress failed: {e}")
-
-        if i % log_every == 0:
-            msg = (
-                f"[{i}/{len(loader)}] bpp={meters['bpp'].avg:.4f} "
-                f"D={meters['distortion'].avg:.6f} loss={meters['loss'].avg:.4f}"
-            )
-            if run_actual_bpp and meters["actual_bpp"].count > 0:
-                msg += f" actual_bpp={meters['actual_bpp'].avg:.4f}"
-            print(msg)
 
     result = {
         "bpp": meters["bpp"].avg,
@@ -163,7 +157,9 @@ def test_ctaic_loader(
     if run_actual_bpp:
         ext_model.update(force=True)
 
-    for i, images in enumerate(loader):
+    total = len(loader) if max_batches is None else min(len(loader), max_batches)
+    pbar = tqdm(loader, total=total, desc="codec eval", leave=True)
+    for i, images in enumerate(pbar):
         if max_batches is not None and i >= max_batches:
             break
         images = images.to(device)
@@ -205,15 +201,6 @@ def test_ctaic_loader(
             except Exception as e:
                 if i == 0:
                     print(f"[warn] actual bpp / compress-decompress failed: {e}")
-
-        if i % log_every == 0:
-            msg = (
-                f"[{i}/{len(loader)}] bpp={meters['bpp'].avg:.4f} "
-                f"D={meters['distortion'].avg:.6f} loss={meters['loss'].avg:.4f}"
-            )
-            if run_actual_bpp and meters["actual_bpp"].count > 0:
-                msg += f" actual_bpp={meters['actual_bpp'].avg:.4f}"
-            print(msg)
 
     result = {
         "bpp": meters["bpp"].avg,
