@@ -11,7 +11,9 @@ Requires optional packages:
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -335,6 +337,70 @@ class SemanticMetricRunner(TaskMetricRunner):
         self.model = init_model(config_path, checkpoint_path, device=self.device)
         self.model.eval()
         self._preds = []
+        dataset_meta = getattr(self.model, "dataset_meta", {}) or {}
+        self.class_names = list(dataset_meta.get("classes") or [])
+
+    @staticmethod
+    def _normalize_class_name(name: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(name).strip().lower())
+
+    @classmethod
+    def _build_target_name_maps(cls, categories: List[Dict[str, Any]]) -> Tuple[Dict[str, int], Dict[str, int]]:
+        exact_map: Dict[str, int] = {}
+        root_buckets: Dict[str, List[int]] = {}
+        for idx, category in enumerate(categories):
+            raw_name = str(category.get("name", ""))
+            exact_key = cls._normalize_class_name(raw_name)
+            if exact_key and exact_key not in exact_map:
+                exact_map[exact_key] = idx
+
+            parts = [p for p in raw_name.strip().lower().split("-") if p]
+            while parts and parts[-1] in {"merged", "other", "stuff"}:
+                parts.pop()
+            if not parts:
+                continue
+            root_key = cls._normalize_class_name("-".join(parts))
+            if root_key:
+                root_buckets.setdefault(root_key, []).append(idx)
+
+        unique_root_map = {
+            root: indices[0] for root, indices in root_buckets.items() if len(indices) == 1
+        }
+        return exact_map, unique_root_map
+
+    @classmethod
+    def _build_pred_to_gt_lookup(
+        cls,
+        pred_class_names: List[str],
+        ann_file: str,
+        ignore_label: int,
+    ):
+        if not pred_class_names:
+            return None, {}
+
+        with open(ann_file) as f:
+            coco = json.load(f)
+        categories = coco.get("categories", [])
+        exact_map, unique_root_map = cls._build_target_name_maps(categories)
+
+        import numpy as np
+
+        lookup = np.full(len(pred_class_names), ignore_label, dtype=np.int64)
+        mapped_pairs = {}
+        for src_idx, src_name in enumerate(pred_class_names):
+            exact_key = cls._normalize_class_name(src_name)
+            target_idx = exact_map.get(exact_key)
+            if target_idx is None:
+                raw_parts = [p for p in str(src_name).strip().lower().split("-") if p]
+                while raw_parts and raw_parts[-1] in {"merged", "other", "stuff"}:
+                    raw_parts.pop()
+                root_key = cls._normalize_class_name("-".join(raw_parts))
+                target_idx = unique_root_map.get(root_key)
+            if target_idx is None:
+                continue
+            lookup[src_idx] = target_idx
+            mapped_pairs[str(src_name).strip()] = categories[target_idx]["name"]
+        return lookup, mapped_pairs
 
     @torch.no_grad()
     def predict_from_h(self, h: torch.Tensor, img_meta: Dict[str, Any]) -> Dict[str, Any]:
@@ -364,11 +430,22 @@ class SemanticMetricRunner(TaskMetricRunner):
         import numpy as np
 
         num_classes = int(kwargs.get("num_classes", 133))
+        ignore_label = int(kwargs.get("ignore_label", 255))
+        lookup, mapped_pairs = self._build_pred_to_gt_lookup(
+            getattr(self, "class_names", []),
+            ann_file,
+            ignore_label=ignore_label,
+        )
         intersect = np.zeros(num_classes, dtype=np.float64)
         union = np.zeros(num_classes, dtype=np.float64)
         for pred in predictions:
             gt = gt_loader(pred["image_id"])
             pr = pred["seg"]
+            if lookup is not None:
+                valid = (pr >= 0) & (pr < len(lookup))
+                remapped = np.full(pr.shape, ignore_label, dtype=np.int64)
+                remapped[valid] = lookup[pr[valid]]
+                pr = remapped
             if gt.shape != pr.shape:
                 # nearest resize pred already at image size; skip mismatch
                 continue
@@ -382,7 +459,13 @@ class SemanticMetricRunner(TaskMetricRunner):
         ious = intersect / np.maximum(union, 1)
         valid = union > 0
         miou = float(ious[valid].mean()) if valid.any() else 0.0
-        return {"mIoU": miou}
+        result = {"mIoU": miou}
+        if lookup is not None:
+            result["mapped_classes"] = len(mapped_pairs)
+            if mapped_pairs:
+                preview = ", ".join(f"{k}->{v}" for k, v in list(mapped_pairs.items())[:12])
+                result["mapping_note"] = f"ADE/semantic classes mapped to COCO categories: {preview}"
+        return result
 
 
 class PanopticMetricRunner(TaskMetricRunner):

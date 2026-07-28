@@ -6,6 +6,7 @@ outputs match the same backbone used at metric evaluation time.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Dict, Optional, Tuple
 
@@ -65,6 +66,7 @@ class OfficialSwinTeacher(nn.Module):
         align_mode: str = "fpn",
         framework: str = "mmdet",
         device: str = "cpu",
+        backbone_only: bool = False,
     ):
         super().__init__()
         assert align_mode in ("fpn", "stages")
@@ -72,6 +74,7 @@ class OfficialSwinTeacher(nn.Module):
         self.framework = framework
         self.config_path = _resolve_path(config_path)
         self.checkpoint_path = _resolve_path(checkpoint_path)
+        self.backbone_only = backbone_only
         if not self.config_path or not os.path.isfile(self.config_path):
             raise FileNotFoundError(f"task_config not found: {config_path}")
         if not self.checkpoint_path or not os.path.isfile(self.checkpoint_path):
@@ -82,9 +85,35 @@ class OfficialSwinTeacher(nn.Module):
         self.out_channels = self._infer_f1_channels()
         self._aux_fpn = None
 
+    def _extract_backbone_state(self, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        backbone_state = {}
+        for k, v in state_dict.items():
+            if k.startswith("backbone."):
+                backbone_state[k[len("backbone.") :]] = v
+            elif k.startswith("module.backbone."):
+                backbone_state[k[len("module.backbone.") :]] = v
+        return backbone_state
+
     def _load_model(self, device: str) -> nn.Module:
         if self.framework == "mmdet":
             from mmdet.apis import init_detector
+
+            if self.backbone_only:
+                model = init_detector(self.config_path, checkpoint=None, device=device)
+                raw = torch.load(self.checkpoint_path, map_location="cpu")
+                state = raw["state_dict"] if isinstance(raw, dict) and "state_dict" in raw else raw
+                backbone_state = self._extract_backbone_state(state)
+                if not backbone_state:
+                    raise RuntimeError(
+                        f"No backbone.* keys found in checkpoint: {self.checkpoint_path}"
+                    )
+                missing, unexpected = model.backbone.load_state_dict(backbone_state, strict=False)
+                logging.info(
+                    "Loaded task-network backbone only: "
+                    f"matched={len(backbone_state) - len(unexpected)} "
+                    f"missing={len(missing)} unexpected={len(unexpected)}"
+                )
+                return model
 
             return init_detector(self.config_path, self.checkpoint_path, device=device)
         if self.framework == "mmseg":
@@ -218,6 +247,7 @@ class OfficialHRNetTeacher(nn.Module):
         super().__init__()
         self.config_path = _resolve_path(config_path)
         self.checkpoint_path = _resolve_path(checkpoint_path)
+        self.backbone_only = backbone_only
         if not self.config_path or not os.path.isfile(self.config_path):
             raise FileNotFoundError(f"task_config not found: {config_path}")
         if not self.checkpoint_path or not os.path.isfile(self.checkpoint_path):

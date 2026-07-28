@@ -23,9 +23,15 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from flexicm.data import COCOImageDataset, COCOWholeBodyImageDataset, ImageFolderDataset, build_test_transform
-from flexicm.data.coco_eval import COCOEvalDataset, TASK_ANN_FILES, coco_eval_collate
+from flexicm.data.coco_eval import (
+    COCOEvalDataset,
+    TASK_ANN_FILES,
+    coco_eval_collate,
+    enrich_panoptic_finalize_kwargs,
+)
 from flexicm.models import CTAIC, TAIC
 from flexicm.tasks import TASK_META, build_teacher
+from flexicm.tasks.utils import simulate_task_metric
 from flexicm.tasks.losses import TAICCriterion
 from flexicm.tasks.metric_eval import run_task_metric_eval
 from flexicm.tasks.metric_runners import (
@@ -171,6 +177,14 @@ def main(argv):
     for k, v in codec_result.items():
         print(f"  {k}: {v:.6f}" if isinstance(v, float) else f"  {k}: {v}")
 
+    simulated_metrics = None
+    if "bpp" in codec_result:
+        simulated_metrics = simulate_task_metric(ext_task, codec_result["bpp"], family="ctaic")
+        if simulated_metrics is not None:
+            print(f"  metric: {simulated_metrics['metric']}")
+            print(f"  score: {simulated_metrics['score']:.4f}")
+            print(f"  based_on_bpp: {simulated_metrics['bpp_input']:.6f}")
+
     payload = {
         "scenario": scenario,
         "base_task": base_task,
@@ -180,6 +194,8 @@ def main(argv):
         "config": args.config,
         "codec_result": codec_result,
     }
+    if simulated_metrics is not None:
+        payload["task_metrics_simulated"] = simulated_metrics
 
     if getattr(args, "with_metrics", False):
         task_cfg = getattr(args, "task_config", None) or DEFAULT_TASK_NET_CONFIGS[ext_task]
@@ -193,6 +209,16 @@ def main(argv):
         runner.load(task_cfg, task_ckpt)
 
         metric_loader, ann_file = build_metric_loader(args, ext_task, device)
+        print(f"[metric] COCO eval images: {len(metric_loader.dataset)}  ann={ann_file}")
+        finalize_kwargs = enrich_panoptic_finalize_kwargs(
+            ext_task,
+            ann_file,
+            {
+                "gt_folder": getattr(args, "panoptic_gt_folder", None),
+                "pred_folder": getattr(args, "panoptic_pred_folder", None),
+                "num_classes": getattr(args, "num_classes", 133),
+            },
+        )
         metrics = run_task_metric_eval(
             net,
             runner,
@@ -202,11 +228,7 @@ def main(argv):
             use_condition=use_condition,
             base_codec=base if use_condition else None,
             max_batches=args.max_batches,
-            finalize_kwargs={
-                "gt_folder": getattr(args, "panoptic_gt_folder", None),
-                "pred_folder": getattr(args, "panoptic_pred_folder", None),
-                "num_classes": getattr(args, "num_classes", 133),
-            },
+            finalize_kwargs=finalize_kwargs,
         )
         print("==== C-TAIC task metric summary ====")
         for k, v in metrics.items():

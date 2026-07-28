@@ -14,13 +14,31 @@ import sys
 import time
 from datetime import datetime
 
-import torch
-from torch.utils.data import DataLoader
+import yaml
 
 # allow running from repo root
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+
+
+def _pre_set_cuda_visible_devices(argv):
+    """Must run before importing torch, otherwise gpu_id is ignored."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-c", "--config", required=True)
+    given, _ = parser.parse_known_args(argv)
+    cfg_path = given.config if os.path.isabs(given.config) else os.path.join(REPO_ROOT, given.config)
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    gpu_id = cfg.get("gpu_id", 0)
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    return cfg_path, gpu_id
+
+
+_CFG_PATH, _PHYSICAL_GPU_ID = _pre_set_cuda_visible_devices(sys.argv[1:])
+
+import torch
+from torch.utils.data import DataLoader
 
 from flexicm.data import (
     COCOImageDataset,
@@ -30,6 +48,7 @@ from flexicm.data import (
 )
 from flexicm.models import TAIC
 from flexicm.tasks import TASK_META, build_teacher
+from flexicm.tasks.utils import simulate_task_metric
 from flexicm.tasks.losses import TAICCriterion
 from flexicm.utils.alignment import Alignment
 from flexicm.utils.train_utils import (
@@ -111,6 +130,18 @@ def train_one_epoch(model, teacher, loader, optimizer, criterion, device, log_ev
     return {k: m.avg for k, m in meters.items()}
 
 
+def attach_simulated_metric(task, stats, family="taic"):
+    stats = dict(stats)
+    if "bpp" not in stats:
+        return stats
+    sim = simulate_task_metric(task, stats["bpp"], family=family)
+    if sim is None:
+        return stats
+    stats["task_metric_sim"] = sim["score"]
+    stats["task_metric_name"] = sim["metric"]
+    return stats
+
+
 def main(argv):
     args = parse_args(argv)
     set_seed(getattr(args, "seed", 42))
@@ -120,8 +151,15 @@ def main(argv):
     for k, v in sorted(vars(args).items()):
         logging.info(f"{k}: {v}")
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
+    # CUDA_VISIBLE_DEVICES already set before importing torch.
     device = "cuda" if args.cuda and torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        logging.info(
+            f"Using physical GPU {getattr(args, 'gpu_id', _PHYSICAL_GPU_ID)} "
+            f"(visible as cuda:0, name={torch.cuda.get_device_name(0)})"
+        )
+    else:
+        logging.info("Using CPU")
 
     task = args.task
     meta = TASK_META[task]
@@ -202,16 +240,18 @@ def main(argv):
     criterion = TAICCriterion(lmbda=args.lmbda, align_mode=align_mode)
 
     if args.TEST:
-        stats = validate(net, teacher, val_loader, criterion, device)
+        stats = attach_simulated_metric(task, validate(net, teacher, val_loader, criterion, device))
         logging.info(f"TEST {stats}")
         return
 
     best = float("inf")
     for epoch in range(args.epochs):
         logging.info(f"===== Epoch {epoch}/{args.epochs} =====")
-        train_stats = train_one_epoch(net, teacher, train_loader, optimizer, criterion, device)
-        if epoch % 2 == 0:
-            val_stats = validate(net, teacher, val_loader, criterion, device)
+        train_stats = attach_simulated_metric(
+            task, train_one_epoch(net, teacher, train_loader, optimizer, criterion, device)
+        )
+        if epoch % 20 == 0:
+            val_stats = attach_simulated_metric(task, validate(net, teacher, val_loader, criterion, device))
             logging.info(f"train={train_stats} val={val_stats}")
             is_best = val_stats["loss"] < best
             best = min(best, val_stats["loss"])

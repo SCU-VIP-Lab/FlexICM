@@ -242,12 +242,14 @@ def build_teacher(task: str, **kwargs) -> nn.Module:
         align_mode = kwargs.pop("align_mode", assets["align_mode"])
         framework = assets["framework"]
         if framework in ("mmdet", "mmseg"):
+            backbone_only = kwargs.pop("teacher_backbone_only", False)
             teacher = OfficialSwinTeacher(
                 config_path=cfg,
                 checkpoint_path=ckpt,
                 align_mode=align_mode,
                 framework=framework,
                 device=device,
+                backbone_only=bool(backbone_only),
             )
             freeze_module(teacher)
             return teacher

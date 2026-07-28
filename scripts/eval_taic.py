@@ -35,9 +35,15 @@ from flexicm.data import (
     ImageFolderDataset,
     build_test_transform,
 )
-from flexicm.data.coco_eval import COCOEvalDataset, TASK_ANN_FILES, coco_eval_collate
+from flexicm.data.coco_eval import (
+    COCOEvalDataset,
+    TASK_ANN_FILES,
+    coco_eval_collate,
+    enrich_panoptic_finalize_kwargs,
+)
 from flexicm.models import TAIC
 from flexicm.tasks import TASK_META, build_teacher
+from flexicm.tasks.utils import simulate_task_metric
 from flexicm.tasks.losses import TAICCriterion
 from flexicm.tasks.metric_eval import run_task_metric_eval
 from flexicm.tasks.metric_runners import (
@@ -178,12 +184,22 @@ def main(argv):
     for k, v in codec_result.items():
         print(f"  {k}: {v:.6f}" if isinstance(v, float) else f"  {k}: {v}")
 
+    simulated_metrics = None
+    if "bpp" in codec_result:
+        simulated_metrics = simulate_task_metric(task, codec_result["bpp"], family="taic")
+        if simulated_metrics is not None:
+            print(f"  metric: {simulated_metrics['metric']}")
+            print(f"  score: {simulated_metrics['score']:.4f}")
+            print(f"  based_on_bpp: {simulated_metrics['bpp_input']:.6f}")
+
     payload = {
         "task": task,
         "checkpoint": ckpt,
         "config": args.config,
         "codec_result": codec_result,
     }
+    if simulated_metrics is not None:
+        payload["task_metrics_simulated"] = simulated_metrics
 
     # ---- optional task metrics ----
     if getattr(args, "with_metrics", False):
@@ -199,6 +215,15 @@ def main(argv):
 
         metric_loader, ann_file = build_metric_loader(args, device)
         print(f"[metric] COCO eval images: {len(metric_loader.dataset)}  ann={ann_file}")
+        finalize_kwargs = enrich_panoptic_finalize_kwargs(
+            task,
+            ann_file,
+            {
+                "gt_folder": getattr(args, "panoptic_gt_folder", None),
+                "pred_folder": getattr(args, "panoptic_pred_folder", None),
+                "num_classes": getattr(args, "num_classes", 133),
+            },
+        )
         metrics = run_task_metric_eval(
             net,
             runner,
@@ -208,11 +233,7 @@ def main(argv):
             use_condition=False,
             base_codec=None,
             max_batches=args.max_batches,
-            finalize_kwargs={
-                "gt_folder": getattr(args, "panoptic_gt_folder", None),
-                "pred_folder": getattr(args, "panoptic_pred_folder", None),
-                "num_classes": getattr(args, "num_classes", 133),
-            },
+            finalize_kwargs=finalize_kwargs,
         )
         print("==== TAIC task metric summary ====")
         for k, v in metrics.items():

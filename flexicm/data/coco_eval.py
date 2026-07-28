@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List, Optional
+from functools import lru_cache
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 from PIL import Image
@@ -68,6 +69,95 @@ def coco_eval_collate(batch: List[Dict[str, Any]]) -> Dict[str, Any]:
         "widths": [b["width"] for b in batch],
         "paths": [b["path"] for b in batch],
     }
+
+
+def resolve_panoptic_gt_folder(
+    ann_file: str,
+    panoptic_gt_folder: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve COCO panoptic PNG folder next to panoptic_val2017.json."""
+    if panoptic_gt_folder and os.path.isdir(panoptic_gt_folder):
+        return panoptic_gt_folder
+    default = os.path.join(os.path.dirname(ann_file), "panoptic_val2017")
+    return default if os.path.isdir(default) else None
+
+
+def build_panoptic_semantic_gt_loader(
+    ann_file: str,
+    gt_folder: str,
+) -> Tuple[Callable[[int], Any], int]:
+    """Build image_id -> semantic label-map loader from COCO panoptic GT.
+
+    Returns:
+      loader(image_id) -> HxW numpy int64 label map on contiguous category ids.
+      num_classes -> number of categories found in the panoptic json.
+    """
+    import numpy as np
+    from PIL import Image
+
+    with open(ann_file) as f:
+        panoptic = json.load(f)
+
+    annotations = {
+        int(ann["image_id"]): ann for ann in panoptic.get("annotations", [])
+    }
+    categories = panoptic.get("categories", [])
+    cat_to_idx = {int(cat["id"]): idx for idx, cat in enumerate(categories)}
+
+    @lru_cache(maxsize=None)
+    def _load(image_id: int):
+        ann = annotations[int(image_id)]
+        png_path = os.path.join(gt_folder, ann["file_name"])
+        rgb = np.array(Image.open(png_path).convert("RGB"), dtype=np.int64)
+        seg_ids = rgb[..., 0] + 256 * rgb[..., 1] + 256 * 256 * rgb[..., 2]
+
+        # 255 as ignore label for segments not covered by segments_info.
+        label = np.full(seg_ids.shape, 255, dtype=np.int64)
+        for seg in ann.get("segments_info", []):
+            seg_id = int(seg["id"])
+            cat_id = int(seg["category_id"])
+            idx = cat_to_idx.get(cat_id, 255)
+            label[seg_ids == seg_id] = idx
+        return label
+
+    return _load, len(categories)
+
+
+def enrich_panoptic_finalize_kwargs(
+    task: str,
+    ann_file: str,
+    finalize_kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Attach panoptic GT folder and optional semantic GT loader for metric eval."""
+    if os.path.basename(ann_file) != "panoptic_val2017.json":
+        return finalize_kwargs
+
+    panoptic_gt_folder = resolve_panoptic_gt_folder(
+        ann_file, finalize_kwargs.get("gt_folder")
+    )
+    if not panoptic_gt_folder:
+        print(
+            f"[metric] panoptic GT folder missing for {ann_file}\n"
+            f"  semantic mIoU / panoptic PQ may be NaN"
+        )
+        return finalize_kwargs
+
+    finalize_kwargs = dict(finalize_kwargs)
+    finalize_kwargs["gt_folder"] = panoptic_gt_folder
+    if task == "semantic":
+        gt_seg_loader, num_classes = build_panoptic_semantic_gt_loader(
+            ann_file, panoptic_gt_folder
+        )
+        finalize_kwargs["gt_seg_loader"] = gt_seg_loader
+        finalize_kwargs["num_classes"] = num_classes
+        print(
+            f"[metric] semantic GT loader from panoptic GT:\n"
+            f"  gt_folder={panoptic_gt_folder}\n"
+            f"  num_classes={num_classes}"
+        )
+    elif task == "panoptic":
+        print(f"[metric] panoptic GT folder resolved: {panoptic_gt_folder}")
+    return finalize_kwargs
 
 
 # Default annotation files relative to coco_root
