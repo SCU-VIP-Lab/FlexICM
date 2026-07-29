@@ -462,9 +462,6 @@ class SemanticMetricRunner(TaskMetricRunner):
         result = {"mIoU": miou}
         if lookup is not None:
             result["mapped_classes"] = len(mapped_pairs)
-            if mapped_pairs:
-                preview = ", ".join(f"{k}->{v}" for k, v in list(mapped_pairs.items())[:12])
-                result["mapping_note"] = f"ADE/semantic classes mapped to COCO categories: {preview}"
         return result
 
 
