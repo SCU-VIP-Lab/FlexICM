@@ -14,6 +14,8 @@ test_batch_size: 1
 num_workers: 4
 pretrained_backbone: true
 
+align_to_task: true
+
 # Official task-network teacher (backbone/neck) for feature alignment D
 use_official_teacher: true
 task_config: "./configs/task_networks/cascade_mask_rcnn_swin_base_coco.py"

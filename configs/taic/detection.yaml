@@ -13,9 +13,11 @@ quality_level: 1
 # paper lambda set: {0.0035, 0.0067, 0.0130, 0.0250, 0.2050}
 lmbda: 0.2050
 num_workers: 8
-batch_size: 8
+batch_size: 2
 test_batch_size: 1
-patch_size: 512
+patch_size: 800  # short edge; alias of short_edge
+max_long_side: 1333  # MMDet keep-ratio cap
+# batch_size may need lowering vs 256-crop training
 cuda: true
 save: true
 seed: 42

@@ -15,6 +15,8 @@ test_batch_size: 1
 num_workers: 4
 pretrained_backbone: true
 
+align_to_task: true
+
 # Official task-network teacher (backbone/neck) for feature alignment D
 # Panoptic-only: Mask2Former + Swin-L (F1=192); other tasks keep Swin-B (128)
 use_official_teacher: true

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import os
 from pathlib import Path
-from typing import Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence
 
 import torch
 from PIL import Image
@@ -16,12 +16,35 @@ from torchvision import transforms
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
+# Official task-network keep-ratio geometry (before codec pad÷256).
+# Det/inst/panoptic: MMDet Resize(scale=(1333, 800), keep_ratio=True)
+# Pose: HigherHRNet BottomupResize expand, short edge 512
+# Semantic: ADE UPerNet test short 512 / long ≤2048
+TASK_ALIGN_DEFAULTS = {
+    "detection": {"short_edge": 800, "max_long_side": 1333},
+    "det": {"short_edge": 800, "max_long_side": 1333},
+    "object_detection": {"short_edge": 800, "max_long_side": 1333},
+    "instance": {"short_edge": 800, "max_long_side": 1333},
+    "instance_seg": {"short_edge": 800, "max_long_side": 1333},
+    "instance_segmentation": {"short_edge": 800, "max_long_side": 1333},
+    "panoptic": {"short_edge": 800, "max_long_side": 1333},
+    "panoptic_seg": {"short_edge": 800, "max_long_side": 1333},
+    "panoptic_segmentation": {"short_edge": 800, "max_long_side": 1333},
+    "pose": {"short_edge": 512, "max_long_side": None},
+    "pose_estimation": {"short_edge": 512, "max_long_side": None},
+    "semantic": {"short_edge": 512, "max_long_side": 2048},
+    "semantic_seg": {"short_edge": 512, "max_long_side": 2048},
+    "semantic_segmentation": {"short_edge": 512, "max_long_side": 2048},
+}
+
+_MISSING = object()
+
 
 class LimitLongSide:
     """If the longer edge exceeds ``max_long_side``, scale the whole image down.
 
     Applied after short-edge expand resize. Short edge may then fall below
-    ``patch_size``; that is intentional to cap GPU memory.
+    ``short_edge``; that is intentional when capping GPU memory.
     """
 
     def __init__(self, max_long_side: int):
@@ -38,31 +61,87 @@ class LimitLongSide:
         return img.resize((nw, nh), resample=Image.BILINEAR)
 
 
-def build_train_transform(
-    patch_size: int = 256,
+def canonicalize_task(task: Optional[str]) -> Optional[str]:
+    if task is None:
+        return None
+    return str(task).strip().lower()
+
+
+def task_align_geom(
+    task: Optional[str],
+    short_edge: Optional[int] = None,
+    max_long_side: Any = _MISSING,
+) -> tuple:
+    """Resolve (short_edge, max_long_side) for a task.
+
+    ``max_long_side=_MISSING`` → use task default (may be ``None`` = no cap).
+    Explicit ``None`` keeps no long-edge cap.
+    """
+    key = canonicalize_task(task)
+    defaults = TASK_ALIGN_DEFAULTS.get(key or "", {})
+    se = int(short_edge) if short_edge is not None else defaults.get("short_edge")
+    if se is None:
+        se = 256
+    if max_long_side is _MISSING:
+        ml = defaults.get("max_long_side", None)
+    else:
+        ml = None if max_long_side is None else int(max_long_side)
+    return int(se), ml
+
+
+def build_expand_transform(
+    short_edge: int = 256,
     max_long_side: Optional[int] = None,
 ) -> Callable:
-    """Deterministic train preprocess matching HigherHRNet BottomupResize(expand).
+    """Keep-ratio short-edge resize (+ optional long-edge cap), then ToTensor.
 
-    - Scale by the **shorter** side to ``patch_size``, keep aspect ratio
-    - Keep the **full** image (longer side may exceed ``patch_size``)
-    - If ``max_long_side`` is set, shrink again when the long edge exceeds it
-    - No crop / flip / anisotropic stretch
-
-    Variable HxW are batched via ``collate_expand_pad`` (pad to ÷256).
+    Matches MMDet ``Resize(short, max_size=long)`` / pose expand semantics.
+    Variable HxW are batched via ``collate_expand_pad`` (pad to ÷256) or
+    ``pad_for_codec`` at eval time.
     """
-    size = int(patch_size)
+    size = int(short_edge)
     ops: List[Callable] = [
-        # torchvision: int size → resize shorter edge to ``size``, keep ratio
         transforms.Resize(
             size,
             interpolation=transforms.InterpolationMode.BILINEAR,
         ),
     ]
     if max_long_side is not None:
+        # torchvision Resize(max_size=...) requires max_size > size; use our op
+        # so pose/train caps like max_long_side == short_edge still work.
         ops.append(LimitLongSide(int(max_long_side)))
     ops.append(transforms.ToTensor())
     return transforms.Compose(ops)
+
+
+def build_train_transform(
+    patch_size: int = 256,
+    max_long_side: Optional[int] = None,
+) -> Callable:
+    """Backward-compatible alias: ``patch_size`` = short edge (expand)."""
+    return build_expand_transform(short_edge=patch_size, max_long_side=max_long_side)
+
+
+def build_task_aligned_transform(
+    task: Optional[str] = None,
+    *,
+    short_edge: Optional[int] = None,
+    max_long_side: Any = _MISSING,
+    eval_size: Optional[int] = None,
+    align_to_task: bool = True,
+) -> Callable:
+    """Preprocess aligned with the official task-network test geometry.
+
+    - ``eval_size`` set → legacy anisotropic square resize (not recommended)
+    - ``align_to_task=False`` → native resolution ``ToTensor`` only
+    - else short-edge / max-long keep-ratio (task defaults or overrides)
+    """
+    if eval_size is not None:
+        return build_test_transform(eval_size=eval_size)
+    if not align_to_task:
+        return transforms.ToTensor()
+    se, ml = task_align_geom(task, short_edge=short_edge, max_long_side=max_long_side)
+    return build_expand_transform(short_edge=se, max_long_side=ml)
 
 
 def build_test_transform(eval_size: Optional[int] = None) -> Callable:

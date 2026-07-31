@@ -14,7 +14,11 @@ test_batch_size: 1
 num_workers: 4
 pretrained_backbone: true
 
+align_to_task: true
+
 # Official task-network teacher (backbone/neck) for feature alignment D
 use_official_teacher: true
 task_config: "./checkpoints/task_networks/pose/higherhrnet_w32_coco_512x512.py"
 task_checkpoint: "./checkpoints/task_networks/pose/higher_hrnet32_coco_512x512-8ae85183_20200713_mmpose1.pth"
+# Multi-scale --with-metrics (codec at each scale → merge heatmaps). null = SS.
+pose_ms_scales: [1.0, 2.0, 0.5]

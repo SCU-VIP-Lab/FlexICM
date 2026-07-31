@@ -34,9 +34,9 @@ if REPO_ROOT not in sys.path:
 from flexicm.data import (
     COCOImageDataset,
     COCOWholeBodyImageDataset,
-    build_train_transform,
-    build_test_transform,
+    build_task_aligned_transform,
     collate_expand_pad,
+    task_align_geom,
 )
 from flexicm.models import CTAIC, TAIC
 from flexicm.tasks import TASK_META, build_teacher
@@ -185,18 +185,32 @@ def main(argv):
     out_channels = getattr(args, "out_channels", meta["out_channels"])
     align_mode = getattr(args, "align_mode", meta["align_mode"])
 
-    max_long_side = getattr(args, "max_long_side", None)
-    train_tf = build_train_transform(args.patch_size, max_long_side=max_long_side)
-    if max_long_side is not None:
-        logging.info(
-            f"Train expand: short_edge={args.patch_size}, max_long_side={max_long_side}"
-        )
+    short_edge = getattr(args, "short_edge", None)
+    if short_edge is None:
+        short_edge = getattr(args, "patch_size", None)
+    from flexicm.data.datasets import _MISSING
+
+    max_long_arg = args.max_long_side if hasattr(args, "max_long_side") else _MISSING
+    align_to_task = bool(getattr(args, "align_to_task", True))
+    train_tf = build_task_aligned_transform(
+        ext_task,
+        short_edge=short_edge,
+        max_long_side=max_long_arg,
+        align_to_task=align_to_task,
+    )
+    se, ml = task_align_geom(ext_task, short_edge=short_edge, max_long_side=max_long_arg)
+    logging.info(f"Train geom: task={ext_task} short_edge={se} max_long_side={ml}")
     if ext_task == "pose":
         train_set = COCOWholeBodyImageDataset(args.dataset_path, "train2017", train_tf)
     else:
         train_set = COCOImageDataset(args.dataset_path, "train2017", train_tf)
-    val_set = COCOImageDataset(args.dataset_path, "val2017", build_test_transform())
-
+    val_tf = build_task_aligned_transform(
+        ext_task,
+        short_edge=short_edge,
+        max_long_side=max_long_arg,
+        align_to_task=align_to_task,
+    )
+    val_set = COCOImageDataset(args.dataset_path, "val2017", val_tf)
     train_loader = DataLoader(
         train_set, batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=(device == "cuda"), drop_last=True,

@@ -13,9 +13,10 @@ gpu_id: 0
 quality_level: 1
 lmbda: 0.0035
 num_workers: 8
-batch_size: 40
+batch_size: 4
 test_batch_size: 1
-patch_size: 256
+patch_size: 512
+max_long_side: 640  # train memory cap; eval uses no cap
 cuda: true
 save: true
 seed: 42

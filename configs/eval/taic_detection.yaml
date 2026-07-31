@@ -8,14 +8,19 @@ ann_file: "annotations/instances_val2017.json"
 quality_level: 1
 lmbda: 0.0035
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
-# null = original COCO resolution; 256 = force 256x256 (aspect stretched)
-eval_size: null
+# Task-aligned keep-ratio geom (see align_to_task). Legacy square: eval_size: 256
+# eval_size: null
 # official task network (required for --with-metrics)
 gpu_id: 0
 cuda: true
 test_batch_size: 1
 num_workers: 4
 pretrained_backbone: true
+
+# align with Cascade Mask R-CNN test: short 800 / long ≤1333
+align_to_task: true
+# short_edge: 800
+# max_long_side: 1333
 
 # Official task-network teacher (backbone/neck) for feature alignment D
 use_official_teacher: true

@@ -705,107 +705,173 @@ class PoseMetricRunner(TaskMetricRunner):
 
     def load(self, config_path: str, checkpoint_path: str) -> None:
         init_model = _require_mmpose()
+        # Register AEHigherResolutionHead via config custom_imports.
         self.model = init_model(config_path, checkpoint_path, device=self.device)
         self.model.eval()
+
+    def _prepare_image_tensor(self, image, h: torch.Tensor):
+        if image is not None and not torch.is_tensor(image):
+            image = None
+        if image is not None and image.dim() == 3:
+            image = image.unsqueeze(0)
+        if image is not None:
+            image = image.to(device=h.device, dtype=h.dtype)
+        return image
+
+    def _decode_instances_from_pred(
+        self,
+        inst,
+        img_meta: Dict[str, Any],
+        pad_h: int,
+        pad_w: int,
+        feat_h: int,
+        feat_w: int,
+    ) -> Dict[str, Any]:
+        import numpy as np
+
+        keypoints = getattr(inst, "keypoints", None)
+        keypoint_scores = getattr(inst, "keypoint_scores", None)
+        bbox_scores = getattr(inst, "bbox_scores", None)
+        if keypoints is None:
+            return {"image_id": img_meta["image_id"], "instances": []}
+
+        sf = img_meta.get("scale_factor", (1.0, 1.0))
+        if isinstance(sf, (int, float)):
+            scale_w = scale_h = float(sf)
+        else:
+            scale_w, scale_h = float(sf[0]), float(sf[1])
+
+        kpts = np.asarray(keypoints, dtype=np.float32)
+        kpt_scores = (
+            np.asarray(keypoint_scores, dtype=np.float32)
+            if keypoint_scores is not None
+            else np.ones(kpts.shape[:2], dtype=np.float32)
+        )
+        if bbox_scores is None:
+            inst_scores = kpt_scores.mean(axis=-1)
+        else:
+            inst_scores = np.asarray(bbox_scores, dtype=np.float32).reshape(-1)
+
+        # AE decode often returns coords on the backbone feature grid (stride 4).
+        # Map feature-space -> padded canvas -> original COCO image coords.
+        sx = float(pad_w) / float(max(feat_w, 1))
+        sy = float(pad_h) / float(max(feat_h, 1))
+        instances = []
+        for i in range(kpts.shape[0]):
+            xy = kpts[i].copy()  # (K, 2)
+            # If already on canvas scale, sx/sy≈1; if on /4 feature grid, sx/sy≈4.
+            max_x = float(np.nanmax(xy[:, 0])) if xy.size else 0.0
+            max_y = float(np.nanmax(xy[:, 1])) if xy.size else 0.0
+            if max_x <= feat_w * 1.5 and max_y <= feat_h * 1.5:
+                xy[:, 0] = xy[:, 0] * sx
+                xy[:, 1] = xy[:, 1] * sy
+            xy[:, 0] = xy[:, 0] / max(scale_w, 1e-6)
+            xy[:, 1] = xy[:, 1] / max(scale_h, 1e-6)
+            score_i = float(inst_scores[i]) if i < len(inst_scores) else float(kpt_scores[i].mean())
+            if score_i < 0.05:
+                continue
+            flat = []
+            for j in range(xy.shape[0]):
+                # COCO visibility flag: 0/1/2; use 2 when confidence is decent
+                vis = 2.0 if float(kpt_scores[i, j]) >= 0.05 else 0.0
+                flat.extend([float(xy[j, 0]), float(xy[j, 1]), vis])
+            instances.append(
+                {
+                    "keypoints": flat,
+                    "score": score_i,
+                    "num_keypoints": int(xy.shape[0]),
+                }
+            )
+        return {"image_id": img_meta["image_id"], "instances": instances}
+
+    def _make_pose_datasample(self, pad_h: int, pad_w: int):
+        import numpy as np
+        from mmpose.structures import PoseDataSample
+
+        meta = getattr(self.model, "dataset_meta", None) or {}
+        flip_indices = meta.get("flip_indices", list(range(17)))
+        ds = PoseDataSample()
+        ds.set_metainfo(
+            dict(
+                img_shape=(pad_h, pad_w),
+                ori_shape=(pad_h, pad_w),
+                input_size=(pad_w, pad_h),
+                input_center=np.array([pad_w / 2.0, pad_h / 2.0], dtype=np.float32),
+                input_scale=np.array([float(pad_w), float(pad_h)], dtype=np.float32),
+                flip_indices=flip_indices,
+            )
+        )
+        return ds
 
     @torch.no_grad()
     def predict_from_h(self, h: torch.Tensor, img_meta: Dict[str, Any]) -> Dict[str, Any]:
         """Inject codec ``h`` as HRNet stage2 branch-0, then AE head → COCO keypoints."""
         assert self.model is not None
         try:
-            import numpy as np
-            from mmpose.structures import PoseDataSample
-
             backbone = self.model.backbone
-            image = img_meta.get("image_tensor", None)
-            if image is not None and not torch.is_tensor(image):
-                image = None
-            if image is not None and image.dim() == 3:
-                image = image.unsqueeze(0)
-            if image is not None:
-                image = image.to(device=h.device, dtype=h.dtype)
-
+            image = self._prepare_image_tensor(img_meta.get("image_tensor", None), h)
             feats = hrnet_feats_from_h(backbone, h, image=image)
 
             pad_h = int(img_meta.get("pad_height", h.shape[-2] * 4))
             pad_w = int(img_meta.get("pad_width", h.shape[-1] * 4))
-            ori_h, ori_w = int(img_meta["height"]), int(img_meta["width"])
-            sf = img_meta.get("scale_factor", (1.0, 1.0))
-            if isinstance(sf, (int, float)):
-                scale_w = scale_h = float(sf)
-            else:
-                scale_w, scale_h = float(sf[0]), float(sf[1])
-
-            # AE decoder maps heatmap coords via input_center / input_scale on the
-            # *network input* grid (padded codec canvas), then we undo eval resize.
-            meta = getattr(self.model, "dataset_meta", None) or {}
-            flip_indices = meta.get("flip_indices", list(range(17)))
-            ds = PoseDataSample()
-            ds.set_metainfo(
-                dict(
-                    img_shape=(pad_h, pad_w),
-                    ori_shape=(pad_h, pad_w),
-                    input_size=(pad_w, pad_h),
-                    input_center=np.array([pad_w / 2.0, pad_h / 2.0], dtype=np.float32),
-                    input_scale=np.array([float(pad_w), float(pad_h)], dtype=np.float32),
-                    flip_indices=flip_indices,
-                )
-            )
+            ds = self._make_pose_datasample(pad_h, pad_w)
             test_cfg = dict(getattr(self.model, "test_cfg", {}) or {})
             # Flip-TTA needs a flipped image feature; keep single-scale from-h.
             test_cfg["flip_test"] = False
+            test_cfg["multiscale_test"] = False
             preds = self.model.head.predict(feats, [ds], test_cfg=test_cfg)
             inst = preds[0] if not isinstance(preds, tuple) else preds[0][0]
-
-            keypoints = getattr(inst, "keypoints", None)
-            keypoint_scores = getattr(inst, "keypoint_scores", None)
-            bbox_scores = getattr(inst, "bbox_scores", None)
-            if keypoints is None:
-                return {"image_id": img_meta["image_id"], "instances": []}
-
-            kpts = np.asarray(keypoints, dtype=np.float32)
-            kpt_scores = (
-                np.asarray(keypoint_scores, dtype=np.float32)
-                if keypoint_scores is not None
-                else np.ones(kpts.shape[:2], dtype=np.float32)
+            return self._decode_instances_from_pred(
+                inst, img_meta, pad_h, pad_w, int(h.shape[-2]), int(h.shape[-1])
             )
-            if bbox_scores is None:
-                inst_scores = kpt_scores.mean(axis=-1)
-            else:
-                inst_scores = np.asarray(bbox_scores, dtype=np.float32).reshape(-1)
+        except Exception as e:
+            return {"image_id": img_meta["image_id"], "error": str(e), "instances": []}
 
-            # AE decode often returns coords on the backbone feature grid (stride 4).
-            # Map feature-space -> padded canvas -> original COCO image coords.
-            feat_h, feat_w = int(h.shape[-2]), int(h.shape[-1])
-            sx = float(pad_w) / float(max(feat_w, 1))
-            sy = float(pad_h) / float(max(feat_h, 1))
-            instances = []
-            for i in range(kpts.shape[0]):
-                xy = kpts[i].copy()  # (K, 2)
-                # If already on canvas scale, sx/sy≈1; if on /4 feature grid, sx/sy≈4.
-                max_x = float(np.nanmax(xy[:, 0])) if xy.size else 0.0
-                max_y = float(np.nanmax(xy[:, 1])) if xy.size else 0.0
-                if max_x <= feat_w * 1.5 and max_y <= feat_h * 1.5:
-                    xy[:, 0] = xy[:, 0] * sx
-                    xy[:, 1] = xy[:, 1] * sy
-                xy[:, 0] = xy[:, 0] / max(scale_w, 1e-6)
-                xy[:, 1] = xy[:, 1] / max(scale_h, 1e-6)
-                score_i = float(inst_scores[i]) if i < len(inst_scores) else float(kpt_scores[i].mean())
-                if score_i < 0.05:
-                    continue
-                flat = []
-                for j in range(xy.shape[0]):
-                    # COCO visibility flag: 0/1/2; use 2 when confidence is decent
-                    vis = 2.0 if float(kpt_scores[i, j]) >= 0.05 else 0.0
-                    flat.extend([float(xy[j, 0]), float(xy[j, 1]), vis])
-                instances.append(
-                    {
-                        "keypoints": flat,
-                        "score": score_i,
-                        "num_keypoints": int(xy.shape[0]),
-                    }
-                )
-            return {"image_id": img_meta["image_id"], "instances": instances}
+    @torch.no_grad()
+    def predict_from_ms_h(
+        self,
+        ms_pack: Sequence[Dict[str, Any]],
+        img_meta: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Multi-scale from-h: each pack is one resolution through the codec.
+
+        ``ms_pack[0]`` must be the base scale (``1.0``): tags and decode use its
+        padded canvas; other scales contribute averaged heatmaps only.
+        """
+        assert self.model is not None
+        if not ms_pack:
+            return {"image_id": img_meta["image_id"], "instances": []}
+        if len(ms_pack) == 1:
+            pack = ms_pack[0]
+            meta = dict(img_meta)
+            meta["image_tensor"] = pack.get("image_tensor")
+            meta["pad_height"] = pack["pad_height"]
+            meta["pad_width"] = pack["pad_width"]
+            return self.predict_from_h(pack["h"], meta)
+
+        try:
+            backbone = self.model.backbone
+            feats_list = []
+            for pack in ms_pack:
+                h = pack["h"]
+                image = self._prepare_image_tensor(pack.get("image_tensor"), h)
+                feats = hrnet_feats_from_h(backbone, h, image=image)
+                # AEHigherResolutionHead MS path expects List[Tuple[Tensor, ...]]
+                feats_list.append(tuple(feats))
+
+            base = ms_pack[0]
+            pad_h = int(base["pad_height"])
+            pad_w = int(base["pad_width"])
+            h0 = base["h"]
+            ds = self._make_pose_datasample(pad_h, pad_w)
+            test_cfg = dict(getattr(self.model, "test_cfg", {}) or {})
+            test_cfg["flip_test"] = False
+            test_cfg["multiscale_test"] = True
+            preds = self.model.head.predict(feats_list, [ds], test_cfg=test_cfg)
+            inst = preds[0] if not isinstance(preds, tuple) else preds[0][0]
+            return self._decode_instances_from_pred(
+                inst, img_meta, pad_h, pad_w, int(h0.shape[-2]), int(h0.shape[-1])
+            )
         except Exception as e:
             return {"image_id": img_meta["image_id"], "error": str(e), "instances": []}
 

@@ -8,6 +8,9 @@ ann_file: "annotations/panoptic_val2017.json"
 quality_level: 1
 lmbda: 0.0035
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
+align_to_task: true
+# ADE test geom: short 512 / long ≤2048
+
 # official task network (required for --with-metrics)
 gpu_id: 0
 cuda: true

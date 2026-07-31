@@ -43,9 +43,9 @@ from torch.utils.data import DataLoader
 from flexicm.data import (
     COCOImageDataset,
     COCOWholeBodyImageDataset,
-    build_train_transform,
-    build_test_transform,
+    build_task_aligned_transform,
     collate_expand_pad,
+    task_align_geom,
 )
 from flexicm.models import TAIC
 from flexicm.tasks import TASK_META, build_teacher
@@ -169,11 +169,21 @@ def main(argv):
 
     # data
     max_long_side = getattr(args, "max_long_side", None)
-    train_tf = build_train_transform(args.patch_size, max_long_side=max_long_side)
-    if max_long_side is not None:
-        logging.info(
-            f"Train expand: short_edge={args.patch_size}, max_long_side={max_long_side}"
-        )
+    # Prefer explicit short_edge / max_long_side; patch_size remains short-edge alias.
+    short_edge = getattr(args, "short_edge", None)
+    if short_edge is None:
+        short_edge = getattr(args, "patch_size", None)
+    from flexicm.data.datasets import _MISSING
+
+    max_long_arg = args.max_long_side if hasattr(args, "max_long_side") else _MISSING
+    train_tf = build_task_aligned_transform(
+        task,
+        short_edge=short_edge,
+        max_long_side=max_long_arg,
+        align_to_task=bool(getattr(args, "align_to_task", True)),
+    )
+    se, ml = task_align_geom(task, short_edge=short_edge, max_long_side=max_long_arg)
+    logging.info(f"Train geom: task={task} short_edge={se} max_long_side={ml}")
     if task == "pose":
         train_set = COCOWholeBodyImageDataset(args.dataset_path, "val2017", train_tf)
     else:
@@ -184,11 +194,17 @@ def main(argv):
         val_root = os.path.join(args.dataset_path, "Kodak") if os.path.isdir(
             os.path.join(args.dataset_path, "Kodak")
         ) else os.path.join(args.dataset_path, "train2017")
+    val_tf = build_task_aligned_transform(
+        task,
+        short_edge=short_edge,
+        max_long_side=max_long_arg,
+        align_to_task=bool(getattr(args, "align_to_task", True)),
+    )
     val_set = COCOImageDataset(
-        os.path.dirname(val_root), os.path.basename(val_root), build_test_transform()
+        os.path.dirname(val_root), os.path.basename(val_root), val_tf
     ) if os.path.basename(val_root) in ("train2017", "val2017") else __import__(
         "flexicm.data", fromlist=["ImageFolderDataset"]
-    ).ImageFolderDataset(val_root, build_test_transform())
+    ).ImageFolderDataset(val_root, val_tf)
 
     train_loader = DataLoader(
         train_set,

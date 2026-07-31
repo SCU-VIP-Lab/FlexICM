@@ -21,7 +21,13 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from flexicm.data import COCOImageDataset, COCOWholeBodyImageDataset, ImageFolderDataset, build_test_transform
+from flexicm.data import (
+    COCOImageDataset,
+    COCOWholeBodyImageDataset,
+    ImageFolderDataset,
+    build_task_aligned_transform,
+    task_align_geom,
+)
 from flexicm.data.coco_eval import (
     COCOEvalDataset,
     TASK_ANN_FILES,
@@ -81,9 +87,36 @@ def parse_args(argv):
     return args
 
 
+def resolve_eval_transform(args, task: str):
+    """Task-network keep-ratio geometry, then codec pads ÷256 in the eval loop."""
+    eval_size = getattr(args, "eval_size", None)
+    align_to_task = bool(getattr(args, "align_to_task", True))
+    short_edge = getattr(args, "short_edge", None)
+    if short_edge is None and hasattr(args, "patch_size"):
+        short_edge = getattr(args, "patch_size")
+    from flexicm.data.datasets import _MISSING
+
+    max_long_arg = args.max_long_side if hasattr(args, "max_long_side") else _MISSING
+    tf = build_task_aligned_transform(
+        task,
+        short_edge=short_edge,
+        max_long_side=max_long_arg,
+        eval_size=eval_size,
+        align_to_task=align_to_task,
+    )
+    if eval_size is not None:
+        print(f"[data] eval transform: square eval_size={eval_size} (legacy)")
+    elif not align_to_task:
+        print("[data] eval transform: native resolution (align_to_task=false)")
+    else:
+        se, ml = task_align_geom(task, short_edge=short_edge, max_long_side=max_long_arg)
+        print(f"[data] eval transform: task={task} short_edge={se} max_long_side={ml}")
+    return tf
+
+
 def build_codec_loader(args, ext_task, device):
     split = args.split or getattr(args, "split", None) or "val2017"
-    tf = build_test_transform()
+    tf = resolve_eval_transform(args, ext_task)
     root = args.dataset_path
     split_dir = os.path.join(root, split)
     if os.path.isdir(split_dir):
@@ -107,7 +140,10 @@ def build_metric_loader(args, ext_task, device):
     ann_rel = getattr(args, "ann_file", None) or TASK_ANN_FILES.get(ext_task)
     ann_file = ann_rel if os.path.isabs(ann_rel) else os.path.join(args.dataset_path, ann_rel)
     dataset = COCOEvalDataset(
-        args.dataset_path, ann_file=ann_file, image_prefix=split, transform=build_test_transform()
+        args.dataset_path,
+        ann_file=ann_file,
+        image_prefix=split,
+        transform=resolve_eval_transform(args, ext_task),
     )
     loader = DataLoader(
         dataset,
@@ -234,6 +270,9 @@ def main(argv):
                 "eval_classes_file": getattr(args, "semantic_eval_classes", None),
             },
         )
+        pose_ms_scales = getattr(args, "pose_ms_scales", None)
+        if ext_task == "pose" and pose_ms_scales is not None:
+            print(f"[metric] pose_ms_scales={pose_ms_scales}")
         metrics = run_task_metric_eval(
             net,
             runner,
@@ -244,6 +283,7 @@ def main(argv):
             base_codec=base if use_condition else None,
             max_batches=args.max_batches,
             finalize_kwargs=finalize_kwargs,
+            pose_ms_scales=pose_ms_scales if ext_task == "pose" else None,
         )
         print("==== C-TAIC task metric summary ====")
         for k, v in metrics.items():
@@ -251,6 +291,8 @@ def main(argv):
         payload["task_config"] = task_cfg
         payload["task_checkpoint"] = task_ckpt
         payload["task_metrics"] = metrics
+        if ext_task == "pose" and pose_ms_scales is not None:
+            payload["pose_ms_scales"] = pose_ms_scales
 
     out_dir = getattr(args, "result_dir", None) or os.path.join(
         REPO_ROOT, "logs", "eval_ctaic", scenario, str(getattr(args, "quality_level", 1))

@@ -16,7 +16,14 @@ test_batch_size: 1
 num_workers: 4
 pretrained_backbone: true
 
+align_to_task: true
+# HigherHRNet expand: short 512, no long-edge cap (override train max_long_side)
+
 # Official task-network teacher (backbone/neck) for feature alignment D
 use_official_teacher: true
 task_config: "./checkpoints/task_networks/pose/higherhrnet_w32_coco_512x512.py"
 task_checkpoint: "./checkpoints/task_networks/pose/higher_hrnet32_coco_512x512-8ae85183_20200713_mmpose1.pth"
+# Multi-scale --with-metrics: resize input by these factors, encode each through
+# the codec, average heatmaps (HigherHRNet-style). null / [1.0] = single-scale.
+# Matches baseline_higherhrnet_image_ms.json scales (flip-TTA still off).
+pose_ms_scales: [1.0, 2.0, 0.5]
