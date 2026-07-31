@@ -40,7 +40,6 @@ from flexicm.data import (
 )
 from flexicm.models import CTAIC, TAIC
 from flexicm.tasks import TASK_META, build_teacher
-from flexicm.tasks.utils import simulate_task_metric
 from flexicm.tasks.losses import TAICCriterion
 from flexicm.utils.alignment import Alignment
 from flexicm.utils.train_utils import (
@@ -157,18 +156,6 @@ def validate(stage, ext_model, base_model, teacher, loader, criterion, device, a
     return {k: m.avg for k, m in meters.items()}
 
 
-def attach_simulated_metric(task, stats, family="ctaic"):
-    stats = dict(stats)
-    if "bpp" not in stats:
-        return stats
-    sim = simulate_task_metric(task, stats["bpp"], family=family)
-    if sim is None:
-        return stats
-    stats["task_metric_sim"] = sim["score"]
-    stats["task_metric_name"] = sim["metric"]
-    return stats
-
-
 def main(argv):
     args = parse_args(argv)
     set_seed(getattr(args, "seed", 42))
@@ -242,10 +229,6 @@ def main(argv):
         net.load_taic_checkpoint(state)
         net.freeze_for_stage2()
 
-    logging.info(
-        f"Trainable params: {sum(p.numel() for p in net.parameters() if p.requires_grad)/1e6:.3f}M"
-    )
-
     teacher = build_teacher(
         ext_task,
         pretrained_backbone=getattr(args, "pretrained_backbone", True),
@@ -269,14 +252,10 @@ def main(argv):
     best = float("inf")
     for epoch in range(args.epochs):
         logging.info(f"===== Stage {stage} Epoch {epoch}/{args.epochs} =====")
-        train_stats = attach_simulated_metric(
-            ext_task,
-            train_one_epoch(stage, net, base_model, teacher, train_loader, optimizer, criterion, device),
+        train_stats = train_one_epoch(
+            stage, net, base_model, teacher, train_loader, optimizer, criterion, device
         )
-        val_stats = attach_simulated_metric(
-            ext_task,
-            validate(stage, net, base_model, teacher, val_loader, criterion, device),
-        )
+        val_stats = validate(stage, net, base_model, teacher, val_loader, criterion, device)
         logging.info(f"train={train_stats} val={val_stats}")
         is_best = val_stats["loss"] < best
         best = min(best, val_stats["loss"])
