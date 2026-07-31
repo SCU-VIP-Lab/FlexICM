@@ -49,7 +49,6 @@ from flexicm.data import (
 )
 from flexicm.models import TAIC
 from flexicm.tasks import TASK_META, build_teacher
-from flexicm.tasks.utils import simulate_task_metric
 from flexicm.tasks.losses import TAICCriterion
 from flexicm.utils.alignment import Alignment
 from flexicm.utils.train_utils import (
@@ -131,18 +130,6 @@ def train_one_epoch(model, teacher, loader, optimizer, criterion, device, log_ev
     return {k: m.avg for k, m in meters.items()}
 
 
-def attach_simulated_metric(task, stats, family="taic"):
-    stats = dict(stats)
-    if "bpp" not in stats:
-        return stats
-    sim = simulate_task_metric(task, stats["bpp"], family=family)
-    if sim is None:
-        return stats
-    stats["task_metric_sim"] = sim["score"]
-    stats["task_metric_name"] = sim["metric"]
-    return stats
-
-
 def main(argv):
     args = parse_args(argv)
     set_seed(getattr(args, "seed", 42))
@@ -220,10 +207,6 @@ def main(argv):
         for p in net.parameters():
             p.requires_grad = True
         logging.info("Base TIC codec unfrozen; training the entire TAIC model")
-    logging.info(
-        f"Trainable params: {sum(p.numel() for p in net.parameters() if p.requires_grad)/1e6:.3f}M / "
-        f"total {sum(p.numel() for p in net.parameters())/1e6:.3f}M"
-    )
 
     teacher = build_teacher(
         task,
@@ -251,18 +234,16 @@ def main(argv):
     logging.info(f"use_bpp_loss={use_bpp_loss}  (loss = {'R + λD' if use_bpp_loss else 'λD only'})")
 
     if args.TEST:
-        stats = attach_simulated_metric(task, validate(net, teacher, val_loader, criterion, device))
+        stats = validate(net, teacher, val_loader, criterion, device)
         logging.info(f"TEST {stats}")
         return
 
     best = float("inf")
     for epoch in range(args.epochs):
         logging.info(f"===== Epoch {epoch}/{args.epochs} =====")
-        train_stats = attach_simulated_metric(
-            task, train_one_epoch(net, teacher, train_loader, optimizer, criterion, device)
-        )
+        train_stats = train_one_epoch(net, teacher, train_loader, optimizer, criterion, device)
         if epoch % 20 == 0:
-            val_stats = attach_simulated_metric(task, validate(net, teacher, val_loader, criterion, device))
+            val_stats = validate(net, teacher, val_loader, criterion, device)
             logging.info(f"train={train_stats} val={val_stats}")
             is_best = val_stats["loss"] < best
             best = min(best, val_stats["loss"])
