@@ -12,10 +12,12 @@ quality_level: 4
 lmbda: 100.35
 # false = train with task feature loss only (loss = λD); bpp is still logged
 use_bpp_loss: true
-num_workers: 2
-batch_size: 2
+num_workers: 4
+batch_size: 4
 test_batch_size: 1
 patch_size: 512
+# Cap long edge after short-edge expand (None / omit = no cap). Helps avoid OOM on wide images.
+max_long_side: 640
 cuda: true
 save: true
 seed: 42

@@ -17,26 +17,52 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
-def build_train_transform(patch_size: int = 256) -> Callable:
+class LimitLongSide:
+    """If the longer edge exceeds ``max_long_side``, scale the whole image down.
+
+    Applied after short-edge expand resize. Short edge may then fall below
+    ``patch_size``; that is intentional to cap GPU memory.
+    """
+
+    def __init__(self, max_long_side: int):
+        self.max_long_side = int(max_long_side)
+
+    def __call__(self, img: Image.Image) -> Image.Image:
+        w, h = img.size
+        long = max(w, h)
+        if long <= self.max_long_side:
+            return img
+        scale = self.max_long_side / float(long)
+        nw = max(1, int(round(w * scale)))
+        nh = max(1, int(round(h * scale)))
+        return img.resize((nw, nh), resample=Image.BILINEAR)
+
+
+def build_train_transform(
+    patch_size: int = 256,
+    max_long_side: Optional[int] = None,
+) -> Callable:
     """Deterministic train preprocess matching HigherHRNet BottomupResize(expand).
 
     - Scale by the **shorter** side to ``patch_size``, keep aspect ratio
     - Keep the **full** image (longer side may exceed ``patch_size``)
+    - If ``max_long_side`` is set, shrink again when the long edge exceeds it
     - No crop / flip / anisotropic stretch
 
     Variable HxW are batched via ``collate_expand_pad`` (pad to ÷256).
     """
     size = int(patch_size)
-    return transforms.Compose(
-        [
-            # torchvision: int size → resize shorter edge to ``size``, keep ratio
-            transforms.Resize(
-                size,
-                interpolation=transforms.InterpolationMode.BILINEAR,
-            ),
-            transforms.ToTensor(),
-        ]
-    )
+    ops: List[Callable] = [
+        # torchvision: int size → resize shorter edge to ``size``, keep ratio
+        transforms.Resize(
+            size,
+            interpolation=transforms.InterpolationMode.BILINEAR,
+        ),
+    ]
+    if max_long_side is not None:
+        ops.append(LimitLongSide(int(max_long_side)))
+    ops.append(transforms.ToTensor())
+    return transforms.Compose(ops)
 
 
 def build_test_transform(eval_size: Optional[int] = None) -> Callable:

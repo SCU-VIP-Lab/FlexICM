@@ -185,7 +185,12 @@ def main(argv):
     out_channels = getattr(args, "out_channels", meta["out_channels"])
     align_mode = getattr(args, "align_mode", meta["align_mode"])
 
-    train_tf = build_train_transform(args.patch_size)
+    max_long_side = getattr(args, "max_long_side", None)
+    train_tf = build_train_transform(args.patch_size, max_long_side=max_long_side)
+    if max_long_side is not None:
+        logging.info(
+            f"Train expand: short_edge={args.patch_size}, max_long_side={max_long_side}"
+        )
     if ext_task == "pose":
         train_set = COCOWholeBodyImageDataset(args.dataset_path, "train2017", train_tf)
     else:

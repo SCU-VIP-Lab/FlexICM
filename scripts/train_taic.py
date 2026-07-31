@@ -168,7 +168,12 @@ def main(argv):
     align_mode = getattr(args, "align_mode", meta["align_mode"])
 
     # data
-    train_tf = build_train_transform(args.patch_size)
+    max_long_side = getattr(args, "max_long_side", None)
+    train_tf = build_train_transform(args.patch_size, max_long_side=max_long_side)
+    if max_long_side is not None:
+        logging.info(
+            f"Train expand: short_edge={args.patch_size}, max_long_side={max_long_side}"
+        )
     if task == "pose":
         train_set = COCOWholeBodyImageDataset(args.dataset_path, "val2017", train_tf)
     else:
