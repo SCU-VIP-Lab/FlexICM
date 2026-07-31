@@ -96,7 +96,7 @@ def parse_args(argv: Optional[Sequence[str]] = None):
         default="detection,instance",
         help="Comma-separated tasks: detection,instance,semantic,panoptic,pose",
     )
-    p.add_argument("--dataset-path", type=str, default="/data/Dataset/coco2017")
+    p.add_argument("--dataset-path", type=str, default="/media/tianma/datasets/coco2017")
     p.add_argument("--split", type=str, default="val2017")
     p.add_argument("--gpu-id", type=int, default=0)
     p.add_argument("--max-images", type=int, default=None)
