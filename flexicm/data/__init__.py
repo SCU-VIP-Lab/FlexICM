@@ -4,6 +4,7 @@ from .datasets import (
     ImageFolderDataset,
     build_test_transform,
     build_train_transform,
+    collate_expand_pad,
     collate_keep,
 )
 from .coco_eval import COCOEvalDataset, TASK_ANN_FILES, coco_eval_collate
@@ -16,6 +17,7 @@ __all__ = [
     "TASK_ANN_FILES",
     "build_test_transform",
     "build_train_transform",
+    "collate_expand_pad",
     "collate_keep",
     "coco_eval_collate",
 ]

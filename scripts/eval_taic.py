@@ -217,6 +217,7 @@ def main(argv):
                 "gt_folder": getattr(args, "panoptic_gt_folder", None),
                 "pred_folder": getattr(args, "panoptic_pred_folder", None),
                 "num_classes": getattr(args, "num_classes", 133),
+                "eval_classes_file": getattr(args, "semantic_eval_classes", None),
             },
         )
         metrics = run_task_metric_eval(

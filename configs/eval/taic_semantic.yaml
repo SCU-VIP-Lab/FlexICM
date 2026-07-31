@@ -2,7 +2,7 @@
 # Checkpoint path is derived from quality_level:
 #   ./checkpoints/taic/{task}/{quality_level}/checkpoint_best_loss.pth.tar
 task: "semantic"
-dataset_path: "/data/Dataset/coco2017"
+dataset_path: "/media/tianma/datasets/coco2017"
 split: "val2017"
 ann_file: "annotations/panoptic_val2017.json"
 quality_level: 1
@@ -15,7 +15,9 @@ test_batch_size: 1
 num_workers: 4
 pretrained_backbone: true
 
-# Official task-network teacher (backbone/neck) for feature alignment D
+# ADE20K UPerNet+Swin-B; --with-metrics on COCO uses the 38-class allowlist in
+# configs/eval/semantic_ade_coco_eval_classes.json (ADE→COCO name match, filtered).
 use_official_teacher: true
 task_config: "./checkpoints/task_networks/semantic/swin-base-patch4-window7-in22k-pre_upernet_8xb2-160k_ade20k-512x512.py"
 task_checkpoint: "./checkpoints/task_networks/semantic/upernet_swin_base_patch4_window7_512x512_160k_ade20k_pretrain_224x224_22K_20210526_211650-762e2178.pth"
+semantic_eval_classes: "./configs/eval/semantic_ade_coco_eval_classes.json"

@@ -18,7 +18,7 @@ Built on the **TIC (Transformer-based Image Compression)** base codec, this repo
 | Object Detection      | Faster R-CNN + **Swin-B**       | FPN `P2..P6` (Eq. 2)    | mAP-bbox |
 | Semantic Segmentation | UPerNet + **Swin-B**            | FPN `P2..P6`            | mIoU     |
 | Instance Segmentation | Cascade Mask R-CNN + **Swin-B** | FPN `P2..P6`            | mAP-mask |
-| Panoptic Segmentation | MaskFormer + **Swin-B**         | Stages `F1..F4` (Eq. 3) | PQ       |
+| Panoptic Segmentation | MaskFormer + **Swin-L**         | Stages `F1..F4` (Eq. 3) | PQ       |
 | Pose Estimation       | **HigherHRNet**                 | Stages `F1..F4`         | mAP-OKS  |
 
 
@@ -217,7 +217,7 @@ Codec **training** only needs images for feature alignment, so `train2017` image
 
 The paper requires **codec training preprocessing to match task-network preprocessing**. Defaults in this repo:
 
-1. **Codec input**: RGB, `ToTensor()` → `[0,1]`; training uses `Resize → RandomCrop(256) → RandomHorizontalFlip`
+1. **Codec input**: RGB, `ToTensor()` → `[0,1]`; training matches HigherHRNet **BottomupResize(expand)**: scale shorter side to `patch_size` (keep ratio, full image), then batch center-pad to ÷256; val/eval use native resolution + pad to ÷256
 2. **Inside the teacher**: ImageNet mean/std normalization (consistent with Swin / HRNet pretraining)
 3. **Spatial alignment**: TIC requires spatial size divisible by **256** (256 crop for training; pad at inference)
 

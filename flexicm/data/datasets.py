@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
-from typing import Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Sequence
 
 import torch
 from PIL import Image
@@ -17,12 +18,22 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
 def build_train_transform(patch_size: int = 256) -> Callable:
-    """Codec training crops; keep RGB float in [0, 1] (normalization inside teacher)."""
+    """Deterministic train preprocess matching HigherHRNet BottomupResize(expand).
+
+    - Scale by the **shorter** side to ``patch_size``, keep aspect ratio
+    - Keep the **full** image (longer side may exceed ``patch_size``)
+    - No crop / flip / anisotropic stretch
+
+    Variable HxW are batched via ``collate_expand_pad`` (pad to ÷256).
+    """
+    size = int(patch_size)
     return transforms.Compose(
         [
-            transforms.Resize(patch_size),
-            transforms.RandomCrop(patch_size),
-            transforms.RandomHorizontalFlip(),
+            # torchvision: int size → resize shorter edge to ``size``, keep ratio
+            transforms.Resize(
+                size,
+                interpolation=transforms.InterpolationMode.BILINEAR,
+            ),
             transforms.ToTensor(),
         ]
     )
@@ -34,10 +45,45 @@ def build_test_transform(eval_size: Optional[int] = None) -> Callable:
         return transforms.ToTensor()
     return transforms.Compose(
         [
-            transforms.Resize((int(eval_size), int(eval_size))),
+            transforms.Resize(
+                (int(eval_size), int(eval_size)),
+                interpolation=transforms.InterpolationMode.BILINEAR,
+            ),
             transforms.ToTensor(),
         ]
     )
+
+
+def _ceil_to_multiple(v: int, base: int) -> int:
+    return int(math.ceil(v / float(base)) * base)
+
+
+def collate_expand_pad(
+    batch: Sequence[torch.Tensor],
+    divisor: int = 256,
+) -> torch.Tensor:
+    """Stack expand-resized images by center-padding to a shared ÷divisor canvas.
+
+    Mirrors pose ``BottomupResize(expand)`` + pad: content stays centered, borders 0.
+    """
+    assert len(batch) > 0
+    assert all(isinstance(x, torch.Tensor) and x.ndim == 3 for x in batch)
+    max_h = max(int(x.shape[-2]) for x in batch)
+    max_w = max(int(x.shape[-1]) for x in batch)
+    canvas_h = _ceil_to_multiple(max_h, divisor)
+    canvas_w = _ceil_to_multiple(max_w, divisor)
+    c = int(batch[0].shape[0])
+    out = batch[0].new_zeros((len(batch), c, canvas_h, canvas_w))
+    for i, x in enumerate(batch):
+        _, h, w = x.shape
+        top = (canvas_h - h) // 2
+        left = (canvas_w - w) // 2
+        out[i, :, top : top + h, left : left + w] = x
+    return out
+
+
+def collate_keep(batch):
+    return torch.stack(batch, dim=0)
 
 
 class ImageFolderDataset(Dataset):
@@ -87,7 +133,3 @@ class COCOWholeBodyImageDataset(ImageFolderDataset):
     def __init__(self, coco_root: str, split: str = "train2017", transform=None, list_file=None):
         image_dir = os.path.join(coco_root, split)
         super().__init__(image_dir, transform=transform, list_file=list_file)
-
-
-def collate_keep(batch):
-    return torch.stack(batch, dim=0)

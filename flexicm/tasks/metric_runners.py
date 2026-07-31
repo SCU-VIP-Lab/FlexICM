@@ -15,11 +15,17 @@ import json
 import os
 import re
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SEMANTIC_EVAL_CLASSES_FILE = (
+    _REPO_ROOT / "configs" / "eval" / "semantic_ade_coco_eval_classes.json"
+)
 
 
 class TaskMetricRunner(ABC):
@@ -262,68 +268,110 @@ class DetectionMetricRunner(TaskMetricRunner):
     def finalize(self, predictions: List[Any], ann_file: str, **kwargs) -> Dict[str, float]:
         from pycocotools.coco import COCO
         from pycocotools.cocoeval import COCOeval
+        from pycocotools import mask as mask_util
         import numpy as np
+        import torch
+
+        def _encode_mask(mask) -> Dict[str, Any]:
+            """Convert HxW bool/uint8 mask to COCO RLE."""
+            if torch.is_tensor(mask):
+                mask = mask.detach().cpu().numpy()
+            mask = np.asarray(mask)
+            if mask.dtype != np.uint8:
+                mask = (mask > 0.5).astype(np.uint8)
+            rle = mask_util.encode(np.asfortranarray(mask))
+            rle["counts"] = rle["counts"].decode("ascii")
+            return rle
 
         coco_gt = COCO(ann_file)
+        cat_ids = coco_gt.getCatIds()
         coco_results = []
         for pred in predictions:
             if pred is None:
                 continue
             if "raw" in pred:
-                # mmdet 2.x format: list[ndarray(n,5)] per class
+                # mmdet 2.x: (bbox_results, segm_results) or bbox_results only
                 raw = pred["raw"]
-                bbox_results = raw[0] if isinstance(raw, tuple) else raw
+                if isinstance(raw, tuple):
+                    bbox_results, segm_results = raw[0], raw[1]
+                else:
+                    bbox_results, segm_results = raw, None
                 for label, bboxes in enumerate(bbox_results):
-                    for row in bboxes:
+                    segms = None
+                    if self.with_mask and segm_results is not None:
+                        segms = segm_results[label]
+                    for i, row in enumerate(bboxes):
                         x1, y1, x2, y2, score = row[:5]
-                        coco_results.append(
-                            {
-                                "image_id": int(pred["image_id"]),
-                                "category_id": int(coco_gt.getCatIds()[label])
-                                if label < len(coco_gt.getCatIds())
-                                else int(label + 1),
-                                "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
-                                "score": float(score),
-                            }
-                        )
+                        item = {
+                            "image_id": int(pred["image_id"]),
+                            "category_id": int(cat_ids[label])
+                            if label < len(cat_ids)
+                            else int(label + 1),
+                            "bbox": [float(x1), float(y1), float(x2 - x1), float(y2 - y1)],
+                            "score": float(score),
+                        }
+                        if segms is not None and i < len(segms):
+                            seg = segms[i]
+                            if isinstance(seg, dict) and "counts" in seg:
+                                # already RLE; ensure counts is str
+                                counts = seg["counts"]
+                                if isinstance(counts, bytes):
+                                    seg = dict(seg)
+                                    seg["counts"] = counts.decode("ascii")
+                                item["segmentation"] = seg
+                            else:
+                                item["segmentation"] = _encode_mask(seg)
+                        coco_results.append(item)
                 continue
 
-            bboxes = pred["bboxes"].numpy()
-            scores = pred["scores"].numpy()
-            labels = pred["labels"].numpy()
-            cat_ids = coco_gt.getCatIds()
-            for box, score, label in zip(bboxes, scores, labels):
-                x1, y1, x2, y2 = box.tolist()
-                cat_id = int(cat_ids[int(label)]) if int(label) < len(cat_ids) else int(label) + 1
-                coco_results.append(
-                    {
-                        "image_id": int(pred["image_id"]),
-                        "category_id": cat_id,
-                        "bbox": [x1, y1, x2 - x1, y2 - y1],
-                        "score": float(score),
-                    }
-                )
+            bboxes = pred["bboxes"].numpy() if torch.is_tensor(pred["bboxes"]) else np.asarray(pred["bboxes"])
+            scores = pred["scores"].numpy() if torch.is_tensor(pred["scores"]) else np.asarray(pred["scores"])
+            labels = pred["labels"].numpy() if torch.is_tensor(pred["labels"]) else np.asarray(pred["labels"])
+            masks = pred.get("masks", None)
+            if masks is not None and torch.is_tensor(masks):
+                masks = masks.detach().cpu().numpy()
+
+            for i, (box, score, label) in enumerate(zip(bboxes, scores, labels)):
+                x1, y1, x2, y2 = [float(v) for v in box.tolist()]
+                lab = int(label)
+                cat_id = int(cat_ids[lab]) if lab < len(cat_ids) else lab + 1
+                item = {
+                    "image_id": int(pred["image_id"]),
+                    "category_id": cat_id,
+                    "bbox": [x1, y1, x2 - x1, y2 - y1],
+                    "score": float(score),
+                }
+                if self.with_mask and masks is not None and i < len(masks):
+                    item["segmentation"] = _encode_mask(masks[i])
+                coco_results.append(item)
 
         if not coco_results:
             return {self.metric_name: 0.0}
 
-        coco_dt = coco_gt.loadRes(coco_results)
-        coco_eval = COCOeval(coco_gt, coco_dt, iouType="bbox")
+        # BBox AP (always useful to log alongside mask)
+        bbox_results = [{k: v for k, v in r.items() if k != "segmentation"} for r in coco_results]
+        coco_dt_bbox = coco_gt.loadRes(bbox_results)
+        coco_eval = COCOeval(coco_gt, coco_dt_bbox, iouType="bbox")
         coco_eval.evaluate()
         coco_eval.accumulate()
         coco_eval.summarize()
         metrics = {"mAP-bbox": float(coco_eval.stats[0])}
 
         if self.with_mask:
-            # Mask eval requires segmentation results in COCO format; if unavailable, skip
-            try:
-                coco_eval_m = COCOeval(coco_gt, coco_dt, iouType="segm")
-                coco_eval_m.evaluate()
-                coco_eval_m.accumulate()
-                coco_eval_m.summarize()
-                metrics["mAP-mask"] = float(coco_eval_m.stats[0])
-            except Exception as e:
-                metrics["mAP-mask_error"] = str(e)
+            n_with_seg = sum(1 for r in coco_results if "segmentation" in r)
+            if n_with_seg == 0:
+                metrics["mAP-mask"] = 0.0
+                metrics["mAP-mask_error"] = "no segmentation fields in predictions"
+            else:
+                try:
+                    coco_dt_seg = coco_gt.loadRes(coco_results)
+                    coco_eval_m = COCOeval(coco_gt, coco_dt_seg, iouType="segm")
+                    coco_eval_m.evaluate()
+                    coco_eval_m.accumulate()
+                    coco_eval_m.summarize()
+                    metrics["mAP-mask"] = float(coco_eval_m.stats[0])
+                except Exception as e:
+                    metrics["mAP-mask_error"] = str(e)
         return metrics
 
 
@@ -369,11 +417,31 @@ class SemanticMetricRunner(TaskMetricRunner):
         return exact_map, unique_root_map
 
     @classmethod
+    def _load_eval_class_allowlist(
+        cls,
+        eval_classes_file: Optional[str] = None,
+        eval_class_names: Optional[Sequence[str]] = None,
+    ) -> Optional[Set[str]]:
+        """COCO class-name allowlist for partial ADE→COCO mIoU."""
+        if eval_class_names:
+            return {str(n).strip() for n in eval_class_names if str(n).strip()}
+        path = eval_classes_file
+        if not path:
+            path = str(DEFAULT_SEMANTIC_EVAL_CLASSES_FILE)
+        if not os.path.isfile(path):
+            return None
+        with open(path) as f:
+            payload = json.load(f)
+        names = payload.get("coco_classes") or payload.get("classes") or []
+        return {str(n).strip() for n in names if str(n).strip()}
+
+    @classmethod
     def _build_pred_to_gt_lookup(
         cls,
         pred_class_names: List[str],
         ann_file: str,
         ignore_label: int,
+        eval_class_allowlist: Optional[Set[str]] = None,
     ):
         if not pred_class_names:
             return None, {}
@@ -398,8 +466,11 @@ class SemanticMetricRunner(TaskMetricRunner):
                 target_idx = unique_root_map.get(root_key)
             if target_idx is None:
                 continue
+            coco_name = str(categories[target_idx]["name"]).strip()
+            if eval_class_allowlist is not None and coco_name not in eval_class_allowlist:
+                continue
             lookup[src_idx] = target_idx
-            mapped_pairs[str(src_name).strip()] = categories[target_idx]["name"]
+            mapped_pairs[str(src_name).strip()] = coco_name
         return lookup, mapped_pairs
 
     @torch.no_grad()
@@ -419,6 +490,7 @@ class SemanticMetricRunner(TaskMetricRunner):
         """Compute mIoU if GT semantic maps are provided via kwargs['gt_dir'] or panoptic conversion.
 
         For a minimal working path, expects kwargs['gt_seg_loader'](image_id)->HxW label map.
+        Paper-style ADE→COCO: only name-matched classes are scored; unmatched GT is ignore.
         """
         gt_loader = kwargs.get("gt_seg_loader")
         if gt_loader is None:
@@ -431,40 +503,86 @@ class SemanticMetricRunner(TaskMetricRunner):
 
         num_classes = int(kwargs.get("num_classes", 133))
         ignore_label = int(kwargs.get("ignore_label", 255))
+        allowlist = self._load_eval_class_allowlist(
+            eval_classes_file=kwargs.get("eval_classes_file"),
+            eval_class_names=kwargs.get("eval_class_names"),
+        )
         lookup, mapped_pairs = self._build_pred_to_gt_lookup(
             getattr(self, "class_names", []),
             ann_file,
             ignore_label=ignore_label,
+            eval_class_allowlist=allowlist,
         )
-        intersect = np.zeros(num_classes, dtype=np.float64)
-        union = np.zeros(num_classes, dtype=np.float64)
+
+        # ADE→COCO partial mIoU: name-matched classes, optionally filtered by allowlist.
+        if lookup is not None and mapped_pairs:
+            eval_classes = sorted(
+                {int(x) for x in lookup.tolist() if int(x) != ignore_label}
+            )
+        else:
+            eval_classes = list(range(num_classes))
+        eval_class_arr = np.asarray(eval_classes, dtype=np.int64)
+        eval_mask = np.zeros(num_classes, dtype=bool)
+        if len(eval_class_arr):
+            eval_mask[eval_class_arr] = True
+
+        # Confusion with an extra sink column for ignore/out-of-range preds (counts as FN).
+        hist = np.zeros((num_classes, num_classes + 1), dtype=np.float64)
+
         for pred in predictions:
             gt = gt_loader(pred["image_id"])
-            pr = pred["seg"]
+            pr = np.asarray(pred["seg"])
             if lookup is not None:
                 valid = (pr >= 0) & (pr < len(lookup))
                 remapped = np.full(pr.shape, ignore_label, dtype=np.int64)
                 remapped[valid] = lookup[pr[valid]]
                 pr = remapped
             if gt.shape != pr.shape:
-                # nearest resize pred already at image size; skip mismatch
                 continue
-            for c in range(num_classes):
-                pb = pr == c
-                gb = gt == c
-                inter = np.logical_and(pb, gb).sum()
-                uni = np.logical_or(pb, gb).sum()
-                intersect[c] += inter
-                union[c] += uni
-        ious = intersect / np.maximum(union, 1)
-        valid = union > 0
-        miou = float(ious[valid].mean()) if valid.any() else 0.0
-        result = {"mIoU": miou}
+            gt_eval = np.asarray(gt, dtype=np.int64)
+            if lookup is not None and mapped_pairs:
+                # Unmapped / OOB GT → ignore (excluded from FP/FN).
+                in_range = (gt_eval >= 0) & (gt_eval < num_classes)
+                mapped_ok = np.zeros(gt_eval.shape, dtype=bool)
+                mapped_ok[in_range] = eval_mask[gt_eval[in_range]]
+                gt_eval = np.where(mapped_ok, gt_eval, ignore_label)
+
+            mask = (gt_eval != ignore_label) & (gt_eval >= 0) & (gt_eval < num_classes)
+            if not np.any(mask):
+                continue
+            gt_m = gt_eval[mask]
+            pr_m = pr[mask].astype(np.int64, copy=False)
+            invalid = (pr_m < 0) | (pr_m >= num_classes) | (pr_m == ignore_label)
+            pr_m = pr_m.copy()
+            pr_m[invalid] = num_classes  # sink → FN only
+            hist += np.bincount(
+                gt_m * (num_classes + 1) + pr_m,
+                minlength=num_classes * (num_classes + 1),
+            ).reshape(num_classes, num_classes + 1)
+
+        ious = []
+        for c in eval_classes:
+            tp = float(hist[c, c])
+            # row includes sink FN; col is FP among non-ignore GT only
+            union = float(hist[c, :].sum() + hist[:num_classes, c].sum() - tp)
+            if union <= 0:
+                continue
+            ious.append(tp / union)
+        miou = float(np.mean(ious)) if ious else 0.0
+        result = {
+            "mIoU": miou,
+            "eval_classes": len(eval_classes),
+            "eval_classes_with_gt": len(ious),
+        }
+        if allowlist is not None:
+            result["eval_class_allowlist_size"] = len(allowlist)
         if lookup is not None:
             result["mapped_classes"] = len(mapped_pairs)
             if mapped_pairs:
                 preview = ", ".join(f"{k}->{v}" for k, v in list(mapped_pairs.items())[:12])
-                result["mapping_note"] = f"ADE/semantic classes mapped to COCO categories: {preview}"
+                result["mapping_note"] = (
+                    f"ADE→COCO partial mIoU over {len(eval_classes)} classes: {preview}"
+                )
         return result
 
 
@@ -520,8 +638,68 @@ class PanopticMetricRunner(TaskMetricRunner):
         return {"PQ": float(results["All"]["pq"])}
 
 
+def hrnet_feats_from_h(
+    backbone: nn.Module,
+    h: torch.Tensor,
+    image: Optional[torch.Tensor] = None,
+) -> List[torch.Tensor]:
+    """Run HRNet stage2–4 with codec feature ``h`` as stage2 branch-0.
+
+    ``h`` is BxC0x(H/4)x(W/4) and replaces ``transition1[0](layer1(stem(x)))``.
+    Other stage2 branches still need a layer1 tensor; when ``image`` (RGB in
+    [0,1], same spatial size as the padded codec input) is provided, the stem
+    + layer1 path builds them. Without ``image``, lower branches are synthesized
+    by lifting ``h`` toward 256-d via a pinv of ``transition1[0]``.
+    """
+    c0 = int(backbone.stage2_cfg["num_channels"][0])
+    if h.shape[1] != c0:
+        if h.shape[1] > c0:
+            h = h[:, :c0]
+        else:
+            reps = (c0 + h.shape[1] - 1) // h.shape[1]
+            h = h.repeat(1, reps, 1, 1)[:, :c0]
+
+    layer1_feat = None
+    if image is not None:
+        # ImageNet norm in float space (matches OfficialHRNetTeacher)
+        mean = h.new_tensor([0.485, 0.456, 0.406])[None, :, None, None]
+        std = h.new_tensor([0.229, 0.224, 0.225])[None, :, None, None]
+        x = (image - mean) / std
+        x = backbone.relu(backbone.norm1(backbone.conv1(x)))
+        x = backbone.relu(backbone.norm2(backbone.conv2(x)))
+        layer1_feat = backbone.layer1(x)
+
+    x_list: List[torch.Tensor] = [h]
+    for i in range(1, int(backbone.stage2_cfg["num_branches"])):
+        trans = backbone.transition1[i]
+        if layer1_feat is not None:
+            x_list.append(trans(layer1_feat) if trans is not None else layer1_feat)
+        else:
+            # Lift h (C0) -> ~256 so transition1[i] (expects layer1 width) can run
+            conv0 = backbone.transition1[0][0]
+            w1 = conv0.weight.data[:, :, 1, 1]  # [C0, 256]
+            wp = torch.linalg.pinv(w1).to(device=h.device, dtype=h.dtype)
+            h256 = F.conv2d(h, wp.unsqueeze(-1).unsqueeze(-1))
+            x_list.append(trans(h256) if trans is not None else h256)
+
+    y_list = backbone.stage2(x_list)
+    x_list = []
+    for i in range(int(backbone.stage3_cfg["num_branches"])):
+        trans = backbone.transition2[i]
+        x_list.append(trans(y_list[-1]) if trans is not None else y_list[i])
+    y_list = backbone.stage3(x_list)
+    x_list = []
+    for i in range(int(backbone.stage4_cfg["num_branches"])):
+        trans = backbone.transition3[i]
+        x_list.append(trans(y_list[-1]) if trans is not None else y_list[i])
+    y_list = backbone.stage4(x_list)
+    if isinstance(y_list, torch.Tensor):
+        return [y_list]
+    return list(y_list)
+
+
 class PoseMetricRunner(TaskMetricRunner):
-    """HigherHRNet (MMPose, original HRNet backbone) — metric: mAP-OKS."""
+    """HigherHRNet / AE-HRNet (MMPose, original HRNet backbone) — metric: mAP-OKS."""
 
     metric_name = "mAP-OKS"
 
@@ -532,48 +710,153 @@ class PoseMetricRunner(TaskMetricRunner):
 
     @torch.no_grad()
     def predict_from_h(self, h: torch.Tensor, img_meta: Dict[str, Any]) -> Dict[str, Any]:
-        """Inject h as early HRNet feature when possible; else return error guidance.
-
-        HigherHRNet uses HRNet (not Swin). Codec `out_channels` should match stem width
-        (default 32). Full keypoint head wiring depends on mmpose version.
-        """
+        """Inject codec ``h`` as HRNet stage2 branch-0, then AE head → COCO keypoints."""
         assert self.model is not None
         try:
-            # Best-effort: if backbone has stage transitions, set first stream feature to h
-            backbone = self.model.backbone if hasattr(self.model, "backbone") else self.model
-            # Many mmpose models expect full image; document limitation
-            if hasattr(self.model, "predict"):
-                # Without image path, we only support feature injection hooks if present
-                return {
-                    "image_id": img_meta["image_id"],
-                    "error": (
-                        "HigherHRNet-from-h requires a project-specific backbone hook; "
-                        "set pose.eval_from_image=true in config to run image-based fallback "
-                        "after optional RGB decode, or implement HRNet stem replacement."
-                    ),
-                }
+            import numpy as np
+            from mmpose.structures import PoseDataSample
+
+            backbone = self.model.backbone
+            image = img_meta.get("image_tensor", None)
+            if image is not None and not torch.is_tensor(image):
+                image = None
+            if image is not None and image.dim() == 3:
+                image = image.unsqueeze(0)
+            if image is not None:
+                image = image.to(device=h.device, dtype=h.dtype)
+
+            feats = hrnet_feats_from_h(backbone, h, image=image)
+
+            pad_h = int(img_meta.get("pad_height", h.shape[-2] * 4))
+            pad_w = int(img_meta.get("pad_width", h.shape[-1] * 4))
+            ori_h, ori_w = int(img_meta["height"]), int(img_meta["width"])
+            sf = img_meta.get("scale_factor", (1.0, 1.0))
+            if isinstance(sf, (int, float)):
+                scale_w = scale_h = float(sf)
+            else:
+                scale_w, scale_h = float(sf[0]), float(sf[1])
+
+            # AE decoder maps heatmap coords via input_center / input_scale on the
+            # *network input* grid (padded codec canvas), then we undo eval resize.
+            meta = getattr(self.model, "dataset_meta", None) or {}
+            flip_indices = meta.get("flip_indices", list(range(17)))
+            ds = PoseDataSample()
+            ds.set_metainfo(
+                dict(
+                    img_shape=(pad_h, pad_w),
+                    ori_shape=(pad_h, pad_w),
+                    input_size=(pad_w, pad_h),
+                    input_center=np.array([pad_w / 2.0, pad_h / 2.0], dtype=np.float32),
+                    input_scale=np.array([float(pad_w), float(pad_h)], dtype=np.float32),
+                    flip_indices=flip_indices,
+                )
+            )
+            test_cfg = dict(getattr(self.model, "test_cfg", {}) or {})
+            # Flip-TTA needs a flipped image feature; keep single-scale from-h.
+            test_cfg["flip_test"] = False
+            preds = self.model.head.predict(feats, [ds], test_cfg=test_cfg)
+            inst = preds[0] if not isinstance(preds, tuple) else preds[0][0]
+
+            keypoints = getattr(inst, "keypoints", None)
+            keypoint_scores = getattr(inst, "keypoint_scores", None)
+            bbox_scores = getattr(inst, "bbox_scores", None)
+            if keypoints is None:
+                return {"image_id": img_meta["image_id"], "instances": []}
+
+            kpts = np.asarray(keypoints, dtype=np.float32)
+            kpt_scores = (
+                np.asarray(keypoint_scores, dtype=np.float32)
+                if keypoint_scores is not None
+                else np.ones(kpts.shape[:2], dtype=np.float32)
+            )
+            if bbox_scores is None:
+                inst_scores = kpt_scores.mean(axis=-1)
+            else:
+                inst_scores = np.asarray(bbox_scores, dtype=np.float32).reshape(-1)
+
+            # AE decode often returns coords on the backbone feature grid (stride 4).
+            # Map feature-space -> padded canvas -> original COCO image coords.
+            feat_h, feat_w = int(h.shape[-2]), int(h.shape[-1])
+            sx = float(pad_w) / float(max(feat_w, 1))
+            sy = float(pad_h) / float(max(feat_h, 1))
+            instances = []
+            for i in range(kpts.shape[0]):
+                xy = kpts[i].copy()  # (K, 2)
+                # If already on canvas scale, sx/sy≈1; if on /4 feature grid, sx/sy≈4.
+                max_x = float(np.nanmax(xy[:, 0])) if xy.size else 0.0
+                max_y = float(np.nanmax(xy[:, 1])) if xy.size else 0.0
+                if max_x <= feat_w * 1.5 and max_y <= feat_h * 1.5:
+                    xy[:, 0] = xy[:, 0] * sx
+                    xy[:, 1] = xy[:, 1] * sy
+                xy[:, 0] = xy[:, 0] / max(scale_w, 1e-6)
+                xy[:, 1] = xy[:, 1] / max(scale_h, 1e-6)
+                score_i = float(inst_scores[i]) if i < len(inst_scores) else float(kpt_scores[i].mean())
+                if score_i < 0.05:
+                    continue
+                flat = []
+                for j in range(xy.shape[0]):
+                    # COCO visibility flag: 0/1/2; use 2 when confidence is decent
+                    vis = 2.0 if float(kpt_scores[i, j]) >= 0.05 else 0.0
+                    flat.extend([float(xy[j, 0]), float(xy[j, 1]), vis])
+                instances.append(
+                    {
+                        "keypoints": flat,
+                        "score": score_i,
+                        "num_keypoints": int(xy.shape[0]),
+                    }
+                )
+            return {"image_id": img_meta["image_id"], "instances": instances}
         except Exception as e:
-            return {"image_id": img_meta["image_id"], "error": str(e)}
-        return {"image_id": img_meta["image_id"], "error": "pose from-h not hooked"}
+            return {"image_id": img_meta["image_id"], "error": str(e), "instances": []}
 
     def finalize(self, predictions: List[Any], ann_file: str, **kwargs) -> Dict[str, float]:
-        # Standard COCO keypoint eval when predictions are in COCO format
-        valid = [p for p in predictions if p and "keypoints" in p]
-        if not valid:
-            return {
-                "mAP-OKS": float("nan"),
-                "note": "No keypoint predictions; implement HigherHRNet-from-h or provide COCO-format preds",
-            }
         from pycocotools.coco import COCO
         from pycocotools.cocoeval import COCOeval
 
+        coco_results = []
+        n_err = 0
+        for pred in predictions:
+            if not pred:
+                continue
+            if pred.get("error"):
+                n_err += 1
+            # Legacy single-instance format
+            if "keypoints" in pred and "instances" not in pred:
+                coco_results.append(
+                    {
+                        "image_id": int(pred["image_id"]),
+                        "category_id": 1,
+                        "keypoints": pred["keypoints"],
+                        "score": float(pred.get("score", 1.0)),
+                    }
+                )
+                continue
+            for inst in pred.get("instances") or []:
+                coco_results.append(
+                    {
+                        "image_id": int(pred["image_id"]),
+                        "category_id": 1,
+                        "keypoints": inst["keypoints"],
+                        "score": float(inst.get("score", 1.0)),
+                    }
+                )
+
+        if not coco_results:
+            note = "No keypoint predictions"
+            if n_err:
+                note += f" ({n_err} images raised errors; see pred['error'])"
+            return {"mAP-OKS": float("nan"), "note": note}
+
         coco_gt = COCO(ann_file)
-        coco_dt = coco_gt.loadRes(valid)
+        coco_dt = coco_gt.loadRes(coco_results)
         ev = COCOeval(coco_gt, coco_dt, iouType="keypoints")
         ev.evaluate()
         ev.accumulate()
         ev.summarize()
-        return {"mAP-OKS": float(ev.stats[0])}
+        out = {"mAP-OKS": float(ev.stats[0]), "num_predictions": len(coco_results)}
+        if n_err:
+            out["num_image_errors"] = n_err
+        return out
 
 
 def build_metric_runner(task: str, device: str = "cuda") -> TaskMetricRunner:
@@ -596,15 +879,15 @@ DEFAULT_TASK_NET_CONFIGS = {
     # Official Swin-Transformer-Object-Detection zoo (same Cascade Mask R-CNN + Swin-B)
     "detection": "configs/task_networks/cascade_mask_rcnn_swin_base_coco.py",  # mAP-bbox
     "instance": "configs/task_networks/cascade_mask_rcnn_swin_base_coco.py",  # mAP-mask
-    "semantic": "configs/task_networks/upernet_swin-b_coco.py",
-    "panoptic": "configs/task_networks/maskformer_swin-b_coco.py",
-    "pose": "configs/task_networks/higherhrnet_w32_coco_wholebody.py",
+    "semantic": "checkpoints/task_networks/semantic/swin-base-patch4-window7-in22k-pre_upernet_8xb2-160k_ade20k-512x512.py",
+    "panoptic": "checkpoints/task_networks/panoptic/mask2former_swin-l-p4-w12-384-in21k_16xb1-lsj-100e_coco-panoptic.py",
+    "pose": "checkpoints/task_networks/pose/higherhrnet_w32_coco_512x512.py",
 }
 
 DEFAULT_TASK_NET_CKPTS = {
-    "detection": "checkpoints/task_networks/detection/model.pth",
-    "instance": "checkpoints/task_networks/instance/model.pth",
-    "semantic": "checkpoints/task_networks/semantic/model.pth",
-    "panoptic": "checkpoints/task_networks/panoptic/model.pth",
-    "pose": "checkpoints/task_networks/pose/model.pth",
+    "detection": "checkpoints/task_networks/detection/model_mmdet3.pth",
+    "instance": "checkpoints/task_networks/instance/model_mmdet3.pth",
+    "semantic": "checkpoints/task_networks/semantic/upernet_swin_base_patch4_window7_512x512_160k_ade20k_pretrain_224x224_22K_20210526_211650-762e2178.pth",
+    "panoptic": "checkpoints/task_networks/panoptic/mask2former_swin-l-p4-w12-384-in21k_16xb1-lsj-100e_coco-panoptic_20220407_104949-82f8d28d.pth",
+    "pose": "checkpoints/task_networks/pose/higher_hrnet32_coco_512x512-8ae85183_20200713_mmpose1.pth",
 }

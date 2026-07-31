@@ -2,7 +2,7 @@
 root: "logs"
 exp_name: "taic_instance"
 task: "instance"
-dataset_path: "/data/Dataset/coco2017"
+dataset_path: "/media/tianma/datasets/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 checkpoint: null
 epochs: 35

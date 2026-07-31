@@ -228,12 +228,22 @@ model = dict(
             max_per_img=100,
             mask_thr_binary=0.5)))
 
-# Minimal dataset meta required by mmdet.apis.init_detector
+# Minimal dataset meta + test pipeline required by mmdet.apis.inference_detector
+test_pipeline = [
+    dict(type='LoadImageFromFile'),
+    dict(type='Resize', scale=(1333, 800), keep_ratio=True),
+    dict(
+        type='PackDetInputs',
+        meta_keys=('img_id', 'img_path', 'ori_shape', 'img_shape',
+                   'scale_factor')),
+]
 test_dataloader = dict(
     dataset=dict(
         type='CocoDataset',
         ann_file='annotations/instances_val2017.json',
         data_prefix=dict(img='val2017/'),
+        pipeline=test_pipeline,
+        test_mode=True,
         metainfo=dict(
             classes=('person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus',
                      'train', 'truck', 'boat', 'traffic light', 'fire hydrant',
@@ -248,4 +258,5 @@ test_dataloader = dict(
                      'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop',
                      'mouse', 'remote', 'keyboard', 'cell phone', 'microwave',
                      'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock',
-                     'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'))))
+                     'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush')))
+)

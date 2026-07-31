@@ -2,7 +2,7 @@
 # Checkpoint path is derived from quality_level:
 #   ./checkpoints/taic/{task}/{quality_level}/checkpoint_best_loss.pth.tar
 task: "panoptic"
-dataset_path: "/data/Dataset/coco2017"
+dataset_path: "/media/tianma/datasets/coco2017"
 split: "val2017"
 ann_file: "annotations/panoptic_val2017.json"
 quality_level: 1
@@ -16,6 +16,7 @@ num_workers: 4
 pretrained_backbone: true
 
 # Official task-network teacher (backbone/neck) for feature alignment D
+# Panoptic-only: Mask2Former + Swin-L (F1=192); other tasks keep Swin-B (128)
 use_official_teacher: true
-task_config: "./checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic.py"
-task_checkpoint: "./checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic_20220329_230021-05ec7315.pth"
+task_config: "./checkpoints/task_networks/panoptic/mask2former_swin-l-p4-w12-384-in21k_16xb1-lsj-100e_coco-panoptic.py"
+task_checkpoint: "./checkpoints/task_networks/panoptic/mask2former_swin-l-p4-w12-384-in21k_16xb1-lsj-100e_coco-panoptic_20220407_104949-82f8d28d.pth"

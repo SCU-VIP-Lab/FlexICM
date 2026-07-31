@@ -48,7 +48,7 @@ class TAIC(nn.Module):
         qk_scale = None
         drop_rate = 0.0
         attn_drop_rate = 0.0
-        drop_path_rate = 0.1
+        drop_path_rate = 0.0  # deterministic training (no stochastic depth)
         norm_layer = nn.LayerNorm
         use_checkpoint = False
 

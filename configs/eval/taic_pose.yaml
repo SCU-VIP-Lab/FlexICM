@@ -2,10 +2,11 @@
 # Checkpoint path is derived from quality_level:
 #   ./checkpoints/taic/{task}/{quality_level}/checkpoint_best_loss.pth.tar
 task: "pose"
-dataset_path: "/data/Dataset/coco2017"
+dataset_path: "/media/tianma/datasets/coco2017"
 split: "val2017"
-ann_file: "annotations/coco_wholebody_val_v1.0.json"
-quality_level: 1
+# HigherHRNet-W32 is COCO-17 body keypoints (not WholeBody)
+ann_file: "annotations/person_keypoints_val2017.json"
+quality_level: 4
 lmbda: 0.0035
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 # official task network (required for --with-metrics)
@@ -17,5 +18,5 @@ pretrained_backbone: true
 
 # Official task-network teacher (backbone/neck) for feature alignment D
 use_official_teacher: true
-task_config: "./checkpoints/task_networks/pose/ae_hrnet-w32_8xb24-300e_coco-512x512.py"
-task_checkpoint: "./checkpoints/task_networks/pose/hrnet_w32_coco_512x512-bcb8c247_20200816.pth"
+task_config: "./checkpoints/task_networks/pose/higherhrnet_w32_coco_512x512.py"
+task_checkpoint: "./checkpoints/task_networks/pose/higher_hrnet32_coco_512x512-8ae85183_20200713_mmpose1.pth"

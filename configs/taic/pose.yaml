@@ -1,18 +1,21 @@
 root: "logs"
 exp_name: "taic_pose"
 task: "pose"
-dataset_path: "/data/Dataset/coco2017"
-base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
-checkpoint: null
-epochs: 35
+dataset_path: "/media/tianma/datasets/coco2017"
+base_codec: "./checkpoints/base_codec/base_codec_4.pth.tar"
+freeze_base_codec: false
+checkpoint: null # "/media/tianma/FlexICM/logs/taic_pose/4/checkpoint_best_loss.pth.tar"
+epochs: 999
 learning_rate: 1.0e-4
 gpu_id: 0
-quality_level: 1
-lmbda: 0.0035
-num_workers: 8
-batch_size: 80
+quality_level: 4
+lmbda: 100.35
+# false = train with task feature loss only (loss = λD); bpp is still logged
+use_bpp_loss: true
+num_workers: 2
+batch_size: 2
 test_batch_size: 1
-patch_size: 256
+patch_size: 512
 cuda: true
 save: true
 seed: 42
@@ -22,5 +25,5 @@ align_mode: "stages"
 
 # Official task-network teacher (backbone/neck) for feature alignment D
 use_official_teacher: true
-task_config: "./checkpoints/task_networks/pose/ae_hrnet-w32_8xb24-300e_coco-512x512.py"
-task_checkpoint: "./checkpoints/task_networks/pose/hrnet_w32_coco_512x512-bcb8c247_20200816.pth"
+task_config: "./checkpoints/task_networks/pose/higherhrnet_w32_coco_512x512.py"
+task_checkpoint: "./checkpoints/task_networks/pose/higher_hrnet32_coco_512x512-8ae85183_20200713_mmpose1.pth"

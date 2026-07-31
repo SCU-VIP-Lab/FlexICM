@@ -49,19 +49,28 @@ class FeatureAlignLoss(nn.Module):
 
 
 class TAICCriterion(nn.Module):
-    """L = R + lambda * D  (paper Eq.1)."""
+    """L = R + lambda * D  (paper Eq.1).
 
-    def __init__(self, lmbda: float, align_mode: str = "fpn"):
+    Set ``use_bpp_loss=False`` to drop the rate term (ablation): loss = lambda * D only.
+    ``bpp`` is still computed and returned for logging.
+    """
+
+    def __init__(self, lmbda: float, align_mode: str = "fpn", use_bpp_loss: bool = True):
         super().__init__()
         self.lmbda = lmbda
+        self.use_bpp_loss = bool(use_bpp_loss)
         self.rate = RateLoss()
         self.align = FeatureAlignLoss(mode=align_mode)
 
     def forward(self, codec_out, pred_feats, gt_feats, num_pixels: int):
         bpp = self.rate(codec_out["likelihoods"], num_pixels)
         dist = self.align(pred_feats, gt_feats)
+        if self.use_bpp_loss:
+            loss = bpp + self.lmbda * dist
+        else:
+            loss = self.lmbda * dist
         return {
-            "loss": bpp + self.lmbda * dist,
+            "loss": loss,
             "bpp": bpp,
             "distortion": dist,
         }

@@ -4,7 +4,7 @@ Five tasks (paper Sec.III.A / IV.A):
   1. Object detection      - Cascade Mask R-CNN + Swin-B (official Swin det zoo; mAP-bbox)
   2. Instance segmentation - Cascade Mask R-CNN + Swin-B (same zoo; mAP-mask)
   3. Semantic segmentation - UPerNet + Swin-B (FPN P2-P6)
-  4. Panoptic segmentation - MaskFormer + Swin-B (stages F1-F4)
+  4. Panoptic segmentation - Mask2Former + Swin-L (stages F1-F4; F1=192)
   5. Pose estimation       - HigherHRNet (original HRNet backbone)
 
 Optional full MMDet/MMSeg/MMPose models can be attached for end-task evaluation;
@@ -44,14 +44,14 @@ DEFAULT_TEACHER_ASSETS = {
         "align_mode": "fpn",
     },
     "panoptic": {
-        "task_config": "checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic.py",
-        "task_checkpoint": "checkpoints/task_networks/panoptic/mask2former_swin-b-p4-w12-384-in21k_8xb2-lsj-50e_coco-panoptic_20220329_230021-05ec7315.pth",
+        "task_config": "checkpoints/task_networks/panoptic/mask2former_swin-l-p4-w12-384-in21k_16xb1-lsj-100e_coco-panoptic.py",
+        "task_checkpoint": "checkpoints/task_networks/panoptic/mask2former_swin-l-p4-w12-384-in21k_16xb1-lsj-100e_coco-panoptic_20220407_104949-82f8d28d.pth",
         "framework": "mmdet",
         "align_mode": "stages",
     },
     "pose": {
-        "task_config": "checkpoints/task_networks/pose/ae_hrnet-w32_8xb24-300e_coco-512x512.py",
-        "task_checkpoint": "checkpoints/task_networks/pose/hrnet_w32_coco_512x512-bcb8c247_20200816.pth",
+        "task_config": "checkpoints/task_networks/pose/higherhrnet_w32_coco_512x512.py",
+        "task_checkpoint": "checkpoints/task_networks/pose/higher_hrnet32_coco_512x512-8ae85183_20200713_mmpose1.pth",
         "framework": "mmpose",
         "align_mode": "stages",
     },
@@ -299,7 +299,7 @@ TASK_META = {
     },
     "panoptic": {
         "align_mode": "stages",
-        "out_channels": 128,
+        "out_channels": 192,  # Mask2Former + Swin-L F1 (other Swin tasks stay 128)
         "metric": "PQ",
         "dataset": "coco",
     },

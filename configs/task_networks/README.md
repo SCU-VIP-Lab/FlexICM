@@ -10,9 +10,9 @@ checkpoint; metrics differ by head output (`bbox` vs `mask`).
 |------|-------|-----------------|
 | detection | **Cascade Mask R-CNN + Swin-B** | [config](https://github.com/SwinTransformer/Swin-Transformer-Object-Detection/blob/master/configs/swin/cascade_mask_rcnn_swin_base_patch4_window7_mstrain_480-800_giou_4conv1f_adamw_3x_coco.py) / [ckpt](https://github.com/SwinTransformer/storage/releases/download/v1.0.2/cascade_mask_rcnn_swin_base_patch4_window7.pth) |
 | instance | **Cascade Mask R-CNN + Swin-B** (same) | same config / checkpoint as detection |
-| semantic | UPerNet + Swin-B | MMSegmentation UPerNet Swin-B |
-| panoptic | MaskFormer + Swin-B | MMDetection MaskFormer Swin-B |
-| pose | HigherHRNet-W32 | MMPose HigherHRNet COCO-WholeBody (HRNet backbone) |
+| semantic | **UPerNet + Swin-B (ADE20K)**; eval on COCO with **38 filtered ADE→COCO classes** (`configs/eval/semantic_ade_coco_eval_classes.json`) | MMSegmentation UPerNet Swin-B ADE20K |
+| panoptic | **Mask2Former + Swin-L** (F1=192; other Swin tasks stay Swin-B/128) | MMDetection Mask2Former Swin-L IN21K |
+| pose | HigherHRNet-W32 (COCO-17) | MMPose HigherHRNet-W32 @512 ([ckpt](https://download.openmmlab.com/mmpose/bottom_up/higher_hrnet32_coco_512x512-8ae85183_20200713.pth)); mmpose1 wrapper config under `checkpoints/task_networks/pose/higherhrnet_w32_coco_512x512.py` |
 
 ### Download detection / instance checkpoints
 

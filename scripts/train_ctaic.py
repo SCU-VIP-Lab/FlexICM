@@ -31,7 +31,13 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from flexicm.data import COCOImageDataset, COCOWholeBodyImageDataset, build_train_transform, build_test_transform
+from flexicm.data import (
+    COCOImageDataset,
+    COCOWholeBodyImageDataset,
+    build_train_transform,
+    build_test_transform,
+    collate_expand_pad,
+)
 from flexicm.models import CTAIC, TAIC
 from flexicm.tasks import TASK_META, build_teacher
 from flexicm.tasks.utils import simulate_task_metric
@@ -187,8 +193,9 @@ def main(argv):
     val_set = COCOImageDataset(args.dataset_path, "val2017", build_test_transform())
 
     train_loader = DataLoader(
-        train_set, batch_size=args.batch_size, shuffle=True,
+        train_set, batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=(device == "cuda"), drop_last=True,
+        collate_fn=collate_expand_pad,
     )
     val_loader = DataLoader(
         val_set, batch_size=args.test_batch_size, shuffle=False,
@@ -234,7 +241,11 @@ def main(argv):
         net = CustomDataParallel(net)
 
     optimizer = adamw_trainable(net, lr=args.learning_rate)
-    criterion = TAICCriterion(lmbda=args.lmbda, align_mode=align_mode)
+    use_bpp_loss = bool(getattr(args, "use_bpp_loss", True))
+    criterion = TAICCriterion(
+        lmbda=args.lmbda, align_mode=align_mode, use_bpp_loss=use_bpp_loss
+    )
+    logging.info(f"use_bpp_loss={use_bpp_loss}  (loss = {'R + λD' if use_bpp_loss else 'λD only'})")
 
     best = float("inf")
     for epoch in range(args.epochs):

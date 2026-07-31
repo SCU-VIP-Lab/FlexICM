@@ -104,7 +104,7 @@ def build_panoptic_semantic_gt_loader(
     categories = panoptic.get("categories", [])
     cat_to_idx = {int(cat["id"]): idx for idx, cat in enumerate(categories)}
 
-    @lru_cache(maxsize=None)
+    @lru_cache(maxsize=64)
     def _load(image_id: int):
         ann = annotations[int(image_id)]
         png_path = os.path.join(gt_folder, ann["file_name"])
@@ -150,10 +150,23 @@ def enrich_panoptic_finalize_kwargs(
         )
         finalize_kwargs["gt_seg_loader"] = gt_seg_loader
         finalize_kwargs["num_classes"] = num_classes
+        # Default ADE→COCO 38-class allowlist unless caller overrides.
+        if not finalize_kwargs.get("eval_classes_file") and not finalize_kwargs.get(
+            "eval_class_names"
+        ):
+            default_classes = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                "configs",
+                "eval",
+                "semantic_ade_coco_eval_classes.json",
+            )
+            if os.path.isfile(default_classes):
+                finalize_kwargs["eval_classes_file"] = default_classes
         print(
             f"[metric] semantic GT loader from panoptic GT:\n"
             f"  gt_folder={panoptic_gt_folder}\n"
-            f"  num_classes={num_classes}"
+            f"  num_classes={num_classes}\n"
+            f"  eval_classes_file={finalize_kwargs.get('eval_classes_file')}"
         )
     elif task == "panoptic":
         print(f"[metric] panoptic GT folder resolved: {panoptic_gt_folder}")
@@ -166,5 +179,5 @@ TASK_ANN_FILES = {
     "instance": "annotations/instances_val2017.json",
     "semantic": "annotations/panoptic_val2017.json",  # or stuff; override in config
     "panoptic": "annotations/panoptic_val2017.json",
-    "pose": "annotations/coco_wholebody_val_v1.0.json",
+    "pose": "annotations/person_keypoints_val2017.json",
 }

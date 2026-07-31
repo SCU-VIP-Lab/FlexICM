@@ -45,6 +45,7 @@ from flexicm.data import (
     COCOWholeBodyImageDataset,
     build_train_transform,
     build_test_transform,
+    collate_expand_pad,
 )
 from flexicm.models import TAIC
 from flexicm.tasks import TASK_META, build_teacher
@@ -187,10 +188,11 @@ def main(argv):
     train_loader = DataLoader(
         train_set,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=False,  # deterministic sample order; no random aug in transform
         num_workers=args.num_workers,
         pin_memory=(device == "cuda"),
         drop_last=True,
+        collate_fn=collate_expand_pad,  # expand-resize → pad batch (pose-style)
     )
     val_loader = DataLoader(
         val_set,
@@ -237,7 +239,11 @@ def main(argv):
         net = CustomDataParallel(net)
 
     optimizer = adamw_trainable(net, lr=args.learning_rate)
-    criterion = TAICCriterion(lmbda=args.lmbda, align_mode=align_mode)
+    use_bpp_loss = bool(getattr(args, "use_bpp_loss", True))
+    criterion = TAICCriterion(
+        lmbda=args.lmbda, align_mode=align_mode, use_bpp_loss=use_bpp_loss
+    )
+    logging.info(f"use_bpp_loss={use_bpp_loss}  (loss = {'R + λD' if use_bpp_loss else 'λD only'})")
 
     if args.TEST:
         stats = attach_simulated_metric(task, validate(net, teacher, val_loader, criterion, device))

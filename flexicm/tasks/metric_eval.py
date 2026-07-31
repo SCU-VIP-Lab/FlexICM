@@ -84,6 +84,9 @@ def run_task_metric_eval(
             meta["pad_height"] = int(x.shape[-2])
             meta["pad_width"] = int(x.shape[-1])
             meta["scale_factor"] = (scale_w, scale_h)
+            # Keep the padded RGB tensor for task nets that need a stem
+            # (e.g. HRNet multi-branch pose) while still injecting codec h.
+            meta["image_tensor"] = x
             pred = runner.predict_from_h(h, meta)
             predictions.append(pred)
 
