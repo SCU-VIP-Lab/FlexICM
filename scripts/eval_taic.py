@@ -200,12 +200,14 @@ def main(argv):
         run_actual_bpp=bool(getattr(args, "actual_bpp", False)),
         max_batches=args.max_batches,
     )
+    with_metrics = bool(getattr(args, "with_metrics", False))
     simulated_metrics = None
-    simulated_metrics = simulate_task_metric(task, family="taic", quality_level=quality_level)
+    if not with_metrics:
+        simulated_metrics = simulate_task_metric(task, family="taic", quality_level=quality_level)
 
     print("==== TAIC codec test summary ====")
     for k, v in codec_result.items():
-        if k == "bpp":
+        if k == "bpp" and simulated_metrics is not None:
             continue
         print(f"  {k}: {v:.6f}" if isinstance(v, float) else f"  {k}: {v}")
     if simulated_metrics is not None:
@@ -222,9 +224,11 @@ def main(argv):
     if simulated_metrics is not None:
         payload["task_metrics_simulated"] = simulated_metrics
         payload["bpp"] = simulated_metrics["bpp"]
+    elif "bpp" in codec_result:
+        payload["bpp"] = codec_result["bpp"]
 
     # ---- optional task metrics ----
-    if getattr(args, "with_metrics", False):
+    if with_metrics:
         task_cfg = getattr(args, "task_config", None) or DEFAULT_TASK_NET_CONFIGS[task]
         task_ckpt = getattr(args, "task_checkpoint", None) or DEFAULT_TASK_NET_CKPTS[task]
         if not os.path.isabs(task_cfg):

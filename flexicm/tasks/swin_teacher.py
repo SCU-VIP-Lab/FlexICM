@@ -244,7 +244,10 @@ class SwinStageTeacher(nn.Module):
             return self.extract_fpn_from_image(x)
         return self.extract_stages_from_image(x)
 
-    def pred_features(self, h: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def pred_features(
+        self, h: torch.Tensor, images: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
+        del images
         if self.use_fpn:
             return self.forward_fpn_from_h(h)
         return self.forward_stages_from_h(h)

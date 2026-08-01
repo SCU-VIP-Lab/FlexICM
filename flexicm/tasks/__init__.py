@@ -80,8 +80,10 @@ class DetectionTeacher(nn.Module):
     def gt_features(self, images: torch.Tensor) -> Dict[str, torch.Tensor]:
         return self.backbone.gt_features(images)
 
-    def pred_features(self, h: torch.Tensor) -> Dict[str, torch.Tensor]:
-        return self.backbone.pred_features(h)
+    def pred_features(
+        self, h: torch.Tensor, images: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
+        return self.backbone.pred_features(h, images=images)
 
 
 class SemanticSegTeacher(nn.Module):
@@ -98,8 +100,10 @@ class SemanticSegTeacher(nn.Module):
     def gt_features(self, images: torch.Tensor) -> Dict[str, torch.Tensor]:
         return self.backbone.gt_features(images)
 
-    def pred_features(self, h: torch.Tensor) -> Dict[str, torch.Tensor]:
-        return self.backbone.pred_features(h)
+    def pred_features(
+        self, h: torch.Tensor, images: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
+        return self.backbone.pred_features(h, images=images)
 
 
 class PanopticSegTeacher(nn.Module):
@@ -116,8 +120,10 @@ class PanopticSegTeacher(nn.Module):
     def gt_features(self, images: torch.Tensor) -> Dict[str, torch.Tensor]:
         return self.backbone.gt_features(images)
 
-    def pred_features(self, h: torch.Tensor) -> Dict[str, torch.Tensor]:
-        return self.backbone.pred_features(h)
+    def pred_features(
+        self, h: torch.Tensor, images: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
+        return self.backbone.pred_features(h, images=images)
 
 
 class HigherHRNetTeacher(nn.Module):
@@ -202,7 +208,10 @@ class HigherHRNetTeacher(nn.Module):
         f1 = self.stem(x)
         return self._stages_from_f1(f1)
 
-    def pred_features(self, h: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def pred_features(
+        self, h: torch.Tensor, images: Optional[torch.Tensor] = None
+    ) -> Dict[str, torch.Tensor]:
+        del images  # legacy stem teacher ignores RGB; official path uses OfficialHRNetTeacher
         if h.shape[1] != self.width:
             if h.shape[1] != self.h_proj.in_channels:
                 # rebuild projection if codec out_channels differs from default 128

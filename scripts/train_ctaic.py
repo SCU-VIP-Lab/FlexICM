@@ -117,7 +117,7 @@ def train_one_epoch(stage, ext_model, base_model, teacher, loader, optimizer, cr
             out = ext_model(images, y_b_hat=y_b, use_condition=True)
         with torch.no_grad():
             gt = teacher.gt_features(images)
-        pred = teacher.pred_features(out["h"])
+        pred = teacher.pred_features(out["h"], images=images)
         N, _, H, W = images.shape
         stats = criterion(out, pred, gt, num_pixels=N * H * W)
         stats["loss"].backward()
@@ -133,21 +133,37 @@ def train_one_epoch(stage, ext_model, base_model, teacher, loader, optimizer, cr
 
 
 @torch.no_grad()
-def validate(stage, ext_model, base_model, teacher, loader, criterion, device, align_divisor=256):
+def validate(
+    stage,
+    ext_model,
+    base_model,
+    teacher,
+    loader,
+    criterion,
+    device,
+    align_divisor=256,
+    pad_mode: str = "corner",
+):
     ext_model.eval()
     meters = {k: AverageMeter() for k in ("loss", "bpp", "distortion")}
     for images in loader:
         images = images.to(device)
-        # Pad to codec/Swin-friendly size (same as train_taic.validate).
-        align = Alignment(divisor=align_divisor, mode="pad", padding_mode="constant").to(device)
-        x = align.align(images)
+        if pad_mode == "center":
+            x = collate_expand_pad(
+                [images[i] for i in range(images.size(0))],
+                divisor=align_divisor,
+            )
+        else:
+            # Pad to codec/Swin-friendly size (legacy corner pad).
+            align = Alignment(divisor=align_divisor, mode="pad", padding_mode="constant").to(device)
+            x = align.align(images)
         if stage == 1:
             out = ext_model(x, use_condition=False)
         else:
             y_b = encode_base_latent(base_model, x)
             out = ext_model(x, y_b_hat=y_b, use_condition=True)
         gt = teacher.gt_features(x)
-        pred = teacher.pred_features(out["h"])
+        pred = teacher.pred_features(out["h"], images=x)
         N, _, H, W = images.shape
         stats = criterion(out, pred, gt, num_pixels=N * H * W)
         for k in meters:
@@ -191,13 +207,14 @@ def main(argv):
         train_set = COCOWholeBodyImageDataset(args.dataset_path, "train2017", train_tf)
     else:
         train_set = COCOImageDataset(args.dataset_path, "train2017", train_tf)
-    val_tf = build_task_aligned_transform(
-        ext_task,
-        short_edge=short_edge,
-        max_long_side=max_long_arg,
-        align_to_task=align_to_task,
-    )
-    val_set = COCOImageDataset(args.dataset_path, "val2017", val_tf)
+    val_tf = train_tf
+    if ext_task == "pose":
+        val_set = COCOWholeBodyImageDataset(args.dataset_path, "val2017", val_tf)
+        logging.info(
+            f"Val geom (pose): short_edge={se} max_long_side={ml} pad=center/÷256 (match train)"
+        )
+    else:
+        val_set = COCOImageDataset(args.dataset_path, "val2017", val_tf)
     train_loader = DataLoader(
         train_set, batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=(device == "cuda"), drop_last=True,
@@ -206,7 +223,9 @@ def main(argv):
     val_loader = DataLoader(
         val_set, batch_size=args.test_batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=(device == "cuda"),
+        collate_fn=collate_expand_pad if ext_task == "pose" else None,
     )
+    val_pad_mode = "center" if ext_task == "pose" else "corner"
 
     base_model = build_base_codec(args, device) if stage == 2 else None
 
@@ -255,7 +274,9 @@ def main(argv):
         train_stats = train_one_epoch(
             stage, net, base_model, teacher, train_loader, optimizer, criterion, device
         )
-        val_stats = validate(stage, net, base_model, teacher, val_loader, criterion, device)
+        val_stats = validate(
+            stage, net, base_model, teacher, val_loader, criterion, device, pad_mode=val_pad_mode
+        )
         logging.info(f"train={train_stats} val={val_stats}")
         is_best = val_stats["loss"] < best
         best = min(best, val_stats["loss"])

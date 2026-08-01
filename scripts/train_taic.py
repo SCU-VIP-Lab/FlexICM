@@ -83,20 +83,41 @@ def parse_args(argv):
 
 
 @torch.no_grad()
-def validate(model, teacher, loader, criterion, device, align_divisor=256):
+def validate(
+    model,
+    teacher,
+    loader,
+    criterion,
+    device,
+    align_divisor=256,
+    pad_mode: str = "corner",
+):
+    """Validate codec feature loss.
+
+    ``pad_mode``:
+      - ``corner``: bottom-right pad (legacy Alignment)
+      - ``center``: match train ``collate_expand_pad`` (pose / expand-style)
+    """
     model.eval()
     meters = {k: AverageMeter() for k in ("loss", "bpp", "distortion")}
     for images in loader:
         images = images.to(device)
-        align = Alignment(divisor=align_divisor, mode="pad", padding_mode="constant").to(device)
-        x = align.align(images)
+        if pad_mode == "center":
+            # Same canvas rule as training collate (no-op if already ÷divisor).
+            x = collate_expand_pad(
+                [images[i] for i in range(images.size(0))],
+                divisor=align_divisor,
+            )
+        else:
+            align = Alignment(divisor=align_divisor, mode="pad", padding_mode="constant").to(device)
+            x = align.align(images)
         out = model(x)
         # Keep teacher + codec features on the aligned (padded) grid so the Swin
         # backbone always sees a patch/window-divisible size. bpp still uses the
         # original pixel count below.
         with torch.no_grad():
             gt = teacher.gt_features(x)
-            pred = teacher.pred_features(out["h"])
+            pred = teacher.pred_features(out["h"], images=x)
         N, _, H, W = images.shape
         stats = criterion(out, pred, gt, num_pixels=N * H * W)
         for k in meters:
@@ -115,7 +136,7 @@ def train_one_epoch(model, teacher, loader, optimizer, criterion, device, log_ev
         out = model(images)
         with torch.no_grad():
             gt = teacher.gt_features(images)
-        pred = teacher.pred_features(out["h"])
+        pred = teacher.pred_features(out["h"], images=images)
         N, _, H, W = images.shape
         stats = criterion(out, pred, gt, num_pixels=N * H * W)
         stats["loss"].backward()
@@ -181,17 +202,22 @@ def main(argv):
         val_root = os.path.join(args.dataset_path, "Kodak") if os.path.isdir(
             os.path.join(args.dataset_path, "Kodak")
         ) else os.path.join(args.dataset_path, "train2017")
-    val_tf = build_task_aligned_transform(
-        task,
-        short_edge=short_edge,
-        max_long_side=max_long_arg,
-        align_to_task=bool(getattr(args, "align_to_task", True)),
-    )
-    val_set = COCOImageDataset(
-        os.path.dirname(val_root), os.path.basename(val_root), val_tf
-    ) if os.path.basename(val_root) in ("train2017", "val2017") else __import__(
-        "flexicm.data", fromlist=["ImageFolderDataset"]
-    ).ImageFolderDataset(val_root, val_tf)
+    # Pose: keep val identical to train expand geom + center pad (official-like).
+    val_tf = train_tf
+    val_split_name = os.path.basename(val_root)
+    if val_split_name in ("train2017", "val2017"):
+        if task == "pose":
+            val_set = COCOWholeBodyImageDataset(args.dataset_path, val_split_name, val_tf)
+        else:
+            val_set = COCOImageDataset(args.dataset_path, val_split_name, val_tf)
+    else:
+        val_set = __import__("flexicm.data", fromlist=["ImageFolderDataset"]).ImageFolderDataset(
+            val_root, val_tf
+        )
+    if task == "pose":
+        logging.info(
+            f"Val geom (pose): short_edge={se} max_long_side={ml} pad=center/÷256 (match train)"
+        )
 
     train_loader = DataLoader(
         train_set,
@@ -208,7 +234,9 @@ def main(argv):
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=(device == "cuda"),
+        collate_fn=collate_expand_pad if task == "pose" else None,
     )
+    val_pad_mode = "center" if task == "pose" else "corner"
 
     # models
     net = TAIC(N=128, M=192, out_channels=out_channels).to(device)
@@ -250,7 +278,9 @@ def main(argv):
     logging.info(f"use_bpp_loss={use_bpp_loss}  (loss = {'R + λD' if use_bpp_loss else 'λD only'})")
 
     if args.TEST:
-        stats = validate(net, teacher, val_loader, criterion, device)
+        stats = validate(
+            net, teacher, val_loader, criterion, device, pad_mode=val_pad_mode
+        )
         logging.info(f"TEST {stats}")
         return
 
@@ -258,8 +288,10 @@ def main(argv):
     for epoch in range(args.epochs):
         logging.info(f"===== Epoch {epoch}/{args.epochs} =====")
         train_stats = train_one_epoch(net, teacher, train_loader, optimizer, criterion, device)
-        if epoch % 20 == 0:
-            val_stats = validate(net, teacher, val_loader, criterion, device)
+        if epoch % 5 == 0:
+            val_stats = validate(
+                net, teacher, val_loader, criterion, device, pad_mode=val_pad_mode
+            )
             logging.info(f"train={train_stats} val={val_stats}")
             is_best = val_stats["loss"] < best
             best = min(best, val_stats["loss"])

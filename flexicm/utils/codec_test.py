@@ -129,7 +129,7 @@ def test_taic_loader(
         out = model(x)
 
         gt = teacher.gt_features(x)
-        pred = teacher.pred_features(out["h"])
+        pred = teacher.pred_features(out["h"], images=x)
         stats = criterion(out, pred, gt, num_pixels=num_pixels)
 
         meters["loss"].update(stats["loss"].item(), n=N)
@@ -203,7 +203,7 @@ def test_ctaic_loader(
         out = ext_model(x, y_b_hat=y_b, use_condition=use_condition and y_b is not None)
 
         gt = teacher.gt_features(x)
-        pred = teacher.pred_features(out["h"])
+        pred = teacher.pred_features(out["h"], images=x)
         stats = criterion(out, pred, gt, num_pixels=num_pixels)
 
         meters["loss"].update(stats["loss"].item(), n=N)

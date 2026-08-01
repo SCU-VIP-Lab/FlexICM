@@ -284,6 +284,9 @@ class AEHigherResolutionHead(nn.Module):
         if multiscale_test:
             assert is_list_of(feats, list if flip_test else tuple)
         else:
+            # Single-scale: HRNet may return list/tuple of branch tensors.
+            if isinstance(feats, tuple) and (not feats or torch.is_tensor(feats[0])):
+                feats = list(feats)
             assert is_list_of(feats, tuple if flip_test else Tensor)
             feats = [feats]
 
@@ -349,7 +352,10 @@ class AEHigherResolutionHead(nn.Module):
 
         if len(feats) > 1:
             batch_heatmaps = aggregate_heatmaps(
-                multiscale_heatmaps, align_corners=align_corners, mode="average"
+                multiscale_heatmaps,
+                size=heatmap_size,
+                align_corners=align_corners,
+                mode="average",
             )
         else:
             batch_heatmaps = multiscale_heatmaps[0]

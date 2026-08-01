@@ -16,6 +16,11 @@ import torch.nn.functional as F
 
 from flexicm.tasks.losses import freeze_module
 from flexicm.tasks.metric_runners import swin_feats_from_h
+from flexicm.tasks.hrnet_features import (
+    hrnet_branches_to_dict,
+    hrnet_feats_from_h,
+    hrnet_feats_from_image,
+)
 
 
 def _resolve_path(path: Optional[str], repo_root: Optional[str] = None) -> Optional[str]:
@@ -224,7 +229,10 @@ class OfficialSwinTeacher(nn.Module):
             return {f"f{i+1}": stages[i] for i in range(min(4, len(stages)))}
         return self._fpn_from_stages(stages)
 
-    def pred_features(self, h: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def pred_features(self, h: torch.Tensor, images: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
+        # ``images`` is accepted for API parity with OfficialHRNetTeacher / train
+        # scripts; Swin from-h MSE does not use RGB (pose HRNet does).
+        del images
         stages = swin_feats_from_h(self.model.backbone, h)
         if self.align_mode == "stages":
             return {f"f{i+1}": stages[i] for i in range(min(4, len(stages)))}
@@ -232,7 +240,16 @@ class OfficialSwinTeacher(nn.Module):
 
 
 class OfficialHRNetTeacher(nn.Module):
-    """Frozen HRNet / HigherHRNet-style teacher from MMPose (stages F1..F4)."""
+    """Frozen HigherHRNet teacher: align real multi-branch stage4 maps F1..F4.
+
+    HigherHRNet's last stage collapses to a single high-res map; we keep the
+    real parallel streams (W32: 32/64/128/256 @ H/4..H/32) as F1..F4 instead of
+    avg-pooling F1. ``f1`` still matches the fused map used by the AE head.
+
+    - ``gt_features(images)``: full stem→stage4 branches
+    - ``pred_features(h, images=...)``: inject codec ``h`` as stage2 branch-0,
+      then the same stage2–4 path as metric eval (``hrnet_feats_from_h``)
+    """
 
     align_mode = "stages"
     out_channels = 32
@@ -258,51 +275,25 @@ class OfficialHRNetTeacher(nn.Module):
         freeze_module(self.model)
         self.width = width
         self.out_channels = width
-        # projection when codec h channels != stem width
-        self.h_proj = freeze_module(nn.Conv2d(128, width, 1))
 
-    def _preprocess(self, images: torch.Tensor) -> torch.Tensor:
-        return _imagenet_norm_rgb01(images)
-
-    def _stages_from_backbone(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
-        bb = self.model.backbone if hasattr(self.model, "backbone") else self.model
-        # HRNet forward usually returns multi-resolution list / tensor
-        feats = bb(x)
-        if isinstance(feats, (list, tuple)):
-            # take highest-res stream as F1, then downsample proxies for F2..F4
-            f1 = feats[0] if feats[0].dim() == 4 else feats[0][-1]
-            outs = [f1]
-            cur = f1
-            for i in range(1, 4):
-                if i < len(feats) and isinstance(feats[i], torch.Tensor) and feats[i].dim() == 4:
-                    outs.append(feats[i])
-                    cur = feats[i]
-                else:
-                    cur = F.avg_pool2d(cur, 2, 2)
-                    outs.append(cur)
-            return {f"f{i+1}": outs[i] for i in range(4)}
-        # single tensor: synthesize pyramid
-        f1 = feats
-        outs = [f1]
-        cur = f1
-        for _ in range(3):
-            cur = F.avg_pool2d(cur, 2, 2)
-            outs.append(cur)
-        return {f"f{i+1}": outs[i] for i in range(4)}
+    @property
+    def backbone(self) -> nn.Module:
+        return self.model.backbone if hasattr(self.model, "backbone") else self.model
 
     def gt_features(self, images: torch.Tensor) -> Dict[str, torch.Tensor]:
-        return self._stages_from_backbone(self._preprocess(images))
+        """RGB [0,1] → real HRNet stage4 multi-branch features."""
+        feats = hrnet_feats_from_image(self.backbone, images)
+        return hrnet_branches_to_dict(feats)
 
-    def pred_features(self, h: torch.Tensor) -> Dict[str, torch.Tensor]:
-        if h.shape[1] != self.width:
-            if self.h_proj.in_channels != h.shape[1]:
-                self.h_proj = freeze_module(nn.Conv2d(h.shape[1], self.width, 1).to(h.device))
-            h = self.h_proj(h)
-        # Approximate remaining stages with stride-2 pools (HRNet full from-h
-        # needs model-specific stem hooks; pyramid still provides multi-scale D).
-        outs = [h]
-        cur = h
-        for _ in range(3):
-            cur = F.avg_pool2d(cur, 2, 2)
-            outs.append(cur)
-        return {f"f{i+1}": outs[i] for i in range(4)}
+    def pred_features(
+        self,
+        h: torch.Tensor,
+        images: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
+        """Codec ``h`` → same HRNet stage2–4 multi-branch maps as metric from-h.
+
+        Pass ``images`` (RGB [0,1], same HxW as codec input) so other stage2
+        branches use the real stem/layer1 path instead of a pinv fallback.
+        """
+        feats = hrnet_feats_from_h(self.backbone, h, image=images)
+        return hrnet_branches_to_dict(feats)

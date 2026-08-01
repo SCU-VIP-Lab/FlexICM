@@ -22,6 +22,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from flexicm.tasks.hrnet_features import hrnet_feats_from_h
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SEMANTIC_EVAL_CLASSES_FILE = (
     _REPO_ROOT / "configs" / "eval" / "semantic_ade_coco_eval_classes.json"
@@ -638,66 +640,6 @@ class PanopticMetricRunner(TaskMetricRunner):
         return {"PQ": float(results["All"]["pq"])}
 
 
-def hrnet_feats_from_h(
-    backbone: nn.Module,
-    h: torch.Tensor,
-    image: Optional[torch.Tensor] = None,
-) -> List[torch.Tensor]:
-    """Run HRNet stage2–4 with codec feature ``h`` as stage2 branch-0.
-
-    ``h`` is BxC0x(H/4)x(W/4) and replaces ``transition1[0](layer1(stem(x)))``.
-    Other stage2 branches still need a layer1 tensor; when ``image`` (RGB in
-    [0,1], same spatial size as the padded codec input) is provided, the stem
-    + layer1 path builds them. Without ``image``, lower branches are synthesized
-    by lifting ``h`` toward 256-d via a pinv of ``transition1[0]``.
-    """
-    c0 = int(backbone.stage2_cfg["num_channels"][0])
-    if h.shape[1] != c0:
-        if h.shape[1] > c0:
-            h = h[:, :c0]
-        else:
-            reps = (c0 + h.shape[1] - 1) // h.shape[1]
-            h = h.repeat(1, reps, 1, 1)[:, :c0]
-
-    layer1_feat = None
-    if image is not None:
-        # ImageNet norm in float space (matches OfficialHRNetTeacher)
-        mean = h.new_tensor([0.485, 0.456, 0.406])[None, :, None, None]
-        std = h.new_tensor([0.229, 0.224, 0.225])[None, :, None, None]
-        x = (image - mean) / std
-        x = backbone.relu(backbone.norm1(backbone.conv1(x)))
-        x = backbone.relu(backbone.norm2(backbone.conv2(x)))
-        layer1_feat = backbone.layer1(x)
-
-    x_list: List[torch.Tensor] = [h]
-    for i in range(1, int(backbone.stage2_cfg["num_branches"])):
-        trans = backbone.transition1[i]
-        if layer1_feat is not None:
-            x_list.append(trans(layer1_feat) if trans is not None else layer1_feat)
-        else:
-            # Lift h (C0) -> ~256 so transition1[i] (expects layer1 width) can run
-            conv0 = backbone.transition1[0][0]
-            w1 = conv0.weight.data[:, :, 1, 1]  # [C0, 256]
-            wp = torch.linalg.pinv(w1).to(device=h.device, dtype=h.dtype)
-            h256 = F.conv2d(h, wp.unsqueeze(-1).unsqueeze(-1))
-            x_list.append(trans(h256) if trans is not None else h256)
-
-    y_list = backbone.stage2(x_list)
-    x_list = []
-    for i in range(int(backbone.stage3_cfg["num_branches"])):
-        trans = backbone.transition2[i]
-        x_list.append(trans(y_list[-1]) if trans is not None else y_list[i])
-    y_list = backbone.stage3(x_list)
-    x_list = []
-    for i in range(int(backbone.stage4_cfg["num_branches"])):
-        trans = backbone.transition3[i]
-        x_list.append(trans(y_list[-1]) if trans is not None else y_list[i])
-    y_list = backbone.stage4(x_list)
-    if isinstance(y_list, torch.Tensor):
-        return [y_list]
-    return list(y_list)
-
-
 class PoseMetricRunner(TaskMetricRunner):
     """HigherHRNet / AE-HRNet (MMPose, original HRNet backbone) — metric: mAP-OKS."""
 
@@ -911,6 +853,11 @@ class PoseMetricRunner(TaskMetricRunner):
             note = "No keypoint predictions"
             if n_err:
                 note += f" ({n_err} images raised errors; see pred['error'])"
+                # Surface a sample error so full-val NaNs are debuggable.
+                for pred in predictions:
+                    if pred and pred.get("error"):
+                        note += f" e.g. {pred['error']}"
+                        break
             return {"mAP-OKS": float("nan"), "note": note}
 
         coco_gt = COCO(ann_file)
