@@ -31,6 +31,9 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     # Prefer deterministic ops where available (still may leave entropy-model noise).
+    # CuBLAS needs an explicit workspace config when deterministic algorithms are on
+    # (required for torch.nn.Linear / matmul on CUDA >= 10.2).
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     try:

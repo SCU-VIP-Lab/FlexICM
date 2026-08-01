@@ -108,6 +108,8 @@ def run_task_metric_eval(
             scale_h = float(H) / float(ori_h) if ori_h > 0 else 1.0
             meta = dict(meta)
             meta["scale_factor"] = (scale_w, scale_h)
+            meta["img_height"] = int(H)
+            meta["img_width"] = int(W)
 
             if use_pose_ms:
                 ms_pack = []

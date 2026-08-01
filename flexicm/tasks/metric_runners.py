@@ -589,7 +589,13 @@ class SemanticMetricRunner(TaskMetricRunner):
 
 
 class PanopticMetricRunner(TaskMetricRunner):
-    """MaskFormer (MMDet) — metric: PQ."""
+    """MaskFormer / Mask2Former (MMDet) — metric: PQ.
+
+    ``predict_from_h`` injects codec ``h`` as Swin F1, runs panoptic_head +
+    panoptic_fusion_head, and returns a CPU panoptic map. ``finalize`` writes
+    COCO-style RGB PNG + JSON under ``pred_folder`` (auto-created if needed)
+    and calls ``panopticapi.evaluation.pq_compute``.
+    """
 
     metric_name = "PQ"
 
@@ -597,47 +603,281 @@ class PanopticMetricRunner(TaskMetricRunner):
         init_detector = _require_mmdet()
         self.model = init_detector(config_path, checkpoint_path, device=self.device)
         self.model.eval()
+        self._label2cat = self._build_label2cat(ann_file=None)
+
+    def _build_label2cat(self, ann_file: Optional[str] = None) -> Dict[int, int]:
+        """Map contiguous model labels -> COCO category ids."""
+        assert self.model is not None
+        meta = getattr(self.model, "dataset_meta", None) or {}
+        classes = [str(c).strip() for c in list(meta.get("classes") or [])]
+        if not classes:
+            return {}
+
+        name_to_id: Dict[str, int] = {}
+        if ann_file and os.path.isfile(ann_file):
+            with open(ann_file) as f:
+                coco = json.load(f)
+            for cat in coco.get("categories", []):
+                name_to_id[str(cat["name"]).strip()] = int(cat["id"])
+        if not name_to_id:
+            # Fallback when GT json is unavailable at load time.
+            return {i: i + 1 for i in range(len(classes))}
+
+        label2cat: Dict[int, int] = {}
+        missing = []
+        for i, name in enumerate(classes):
+            if name in name_to_id:
+                label2cat[i] = name_to_id[name]
+            else:
+                missing.append((i, name))
+        if missing:
+            print(
+                f"[metric] panoptic label2cat missing {len(missing)} class name(s), "
+                f"e.g. {missing[:5]} (will treat as VOID)"
+            )
+        return label2cat
 
     @torch.no_grad()
     def predict_from_h(self, h: torch.Tensor, img_meta: Dict[str, Any]) -> Dict[str, Any]:
         assert self.model is not None
-        # MaskFormer typically uses backbone features F1..F4 directly
         backbone = self.model.backbone
         feats = swin_feats_from_h(backbone, h)
-        H, W = int(img_meta["height"]), int(img_meta["width"])
+
+        ori_h, ori_w = int(img_meta["height"]), int(img_meta["width"])
+        pad_h = int(img_meta.get("pad_height", h.shape[-2] * 4))
+        pad_w = int(img_meta.get("pad_width", h.shape[-1] * 4))
+        # Unpadded resized tensor size (codec pads after this).
+        img_h = int(img_meta.get("img_height", pad_h))
+        img_w = int(img_meta.get("img_width", pad_w))
+
+        file_name = img_meta.get("file_name") or f"{int(img_meta['image_id']):012d}.jpg"
+        segm_file = os.path.splitext(os.path.basename(str(file_name)))[0] + ".png"
+
         try:
             from mmdet.structures import DetDataSample
 
+            if not hasattr(self.model, "panoptic_head") or not hasattr(
+                self.model, "panoptic_fusion_head"
+            ):
+                return {
+                    "image_id": img_meta["image_id"],
+                    "file_name": segm_file,
+                    "error": "model missing panoptic_head / panoptic_fusion_head",
+                }
+
             data_sample = DetDataSample()
             data_sample.set_metainfo(
-                dict(img_shape=(H, W), ori_shape=(H, W), pad_shape=(H, W), img_id=img_meta["image_id"])
+                dict(
+                    img_shape=(img_h, img_w),
+                    ori_shape=(ori_h, ori_w),
+                    pad_shape=(pad_h, pad_w),
+                    batch_input_shape=(pad_h, pad_w),
+                    img_id=img_meta["image_id"],
+                )
             )
-            # panoptic head path differs by version; store feats for custom head call
-            if hasattr(self.model, "panoptic_head"):
-                results = self.model.panoptic_head.predict(feats, [data_sample], rescale=True)
-                return {"image_id": img_meta["image_id"], "panoptic": results[0]}
-            if hasattr(self.model, "simple_test"):
-                # older API expects image tensor; not ideal for h-injection
-                return {"image_id": img_meta["image_id"], "feats_only": True, "error": "need panoptic_head"}
+            mask_cls, mask_pred = self.model.panoptic_head.predict(
+                feats, [data_sample]
+            )
+            results_list = self.model.panoptic_fusion_head.predict(
+                mask_cls, mask_pred, [data_sample], rescale=True
+            )
+            pan_results = results_list[0].get("pan_results")
+            if pan_results is None:
+                return {
+                    "image_id": img_meta["image_id"],
+                    "file_name": segm_file,
+                    "error": "fusion head returned no pan_results",
+                }
+            sem = pan_results.sem_seg
+            if hasattr(sem, "detach"):
+                pan = sem.detach().cpu().numpy()
+            else:
+                pan = sem
+            if pan.ndim == 3:
+                pan = pan[0]
+            return {
+                "image_id": int(img_meta["image_id"]),
+                "file_name": segm_file,
+                "panoptic_seg": pan.astype("int64", copy=False),
+            }
         except Exception as e:
-            return {"image_id": img_meta["image_id"], "error": str(e)}
-        return {"image_id": img_meta["image_id"], "error": "unsupported MaskFormer API"}
+            return {
+                "image_id": img_meta["image_id"],
+                "file_name": segm_file,
+                "error": str(e),
+            }
+
+    def _export_predictions(
+        self,
+        predictions: List[Any],
+        ann_file: str,
+        pred_folder: str,
+        pred_json: str,
+    ) -> Tuple[str, str, int]:
+        """Write RGB panoptic PNGs + JSON; return paths and #exported images."""
+        import numpy as np
+        from PIL import Image
+        from mmdet.evaluation.functional import INSTANCE_OFFSET
+        from panopticapi.utils import id2rgb
+
+        os.makedirs(pred_folder, exist_ok=True)
+        label2cat = self._build_label2cat(ann_file=ann_file) or self._label2cat
+        meta = getattr(self.model, "dataset_meta", None) or {}
+        num_classes = len(list(meta.get("classes") or []))
+        ignore_index = int(meta.get("ignore_index", num_classes)) if num_classes else 255
+        VOID = 0
+
+        annotations = []
+        n_err = 0
+        for pred in predictions:
+            if not pred:
+                continue
+            if pred.get("error") or "panoptic_seg" not in pred:
+                n_err += 1
+                continue
+            pan = np.asarray(pred["panoptic_seg"]).copy()
+            image_id = int(pred["image_id"])
+            segm_file = pred.get("file_name") or f"{image_id:012d}.png"
+
+            segments_info = []
+            keep_ids = set()
+            for pan_label in np.unique(pan):
+                pan_label = int(pan_label)
+                sem_label = pan_label % INSTANCE_OFFSET
+                if sem_label == num_classes or sem_label == ignore_index:
+                    continue
+                if label2cat and sem_label not in label2cat:
+                    continue
+                mask = pan == pan_label
+                area = int(mask.sum())
+                if area <= 0:
+                    continue
+                cat_id = int(label2cat[sem_label]) if label2cat else int(sem_label)
+                segments_info.append(
+                    {
+                        "id": pan_label,
+                        "category_id": cat_id,
+                        "area": area,
+                        "iscrowd": 0,
+                    }
+                )
+                keep_ids.add(pan_label)
+
+            # panopticapi requires PNG ids ⊆ JSON segments_info (VOID=0 allowed).
+            # Drop any leftover label (unmapped class / ignore) to VOID.
+            if keep_ids:
+                keep_mask = np.isin(pan, list(keep_ids))
+                pan = np.where(keep_mask, pan, VOID).astype(pan.dtype, copy=False)
+            else:
+                pan = np.zeros_like(pan)
+
+            rgb = id2rgb(pan.astype(np.uint32, copy=False)).astype(np.uint8)
+            Image.fromarray(rgb).save(os.path.join(pred_folder, segm_file))
+            annotations.append(
+                {
+                    "image_id": image_id,
+                    "file_name": segm_file,
+                    "segments_info": segments_info,
+                }
+            )
+
+        with open(ann_file) as f:
+            gt = json.load(f)
+        pred_payload = {
+            "annotations": annotations,
+            "categories": gt.get("categories", []),
+            "images": gt.get("images", []),
+        }
+        os.makedirs(os.path.dirname(pred_json) or ".", exist_ok=True)
+        with open(pred_json, "w") as f:
+            json.dump(pred_payload, f)
+        return pred_folder, pred_json, n_err
 
     def finalize(self, predictions: List[Any], ann_file: str, **kwargs) -> Dict[str, float]:
-        # Full PQ needs panopticapi; keep a clear placeholder result if preds incomplete
         try:
             from panopticapi.evaluation import pq_compute
         except ImportError:
             return {
                 "PQ": float("nan"),
-                "note": "Install panopticapi and provide GT panoptic folder to compute PQ",
+                "note": "Install panopticapi: pip install git+https://github.com/cocodataset/panopticapi.git",
             }
+
         gt_folder = kwargs.get("gt_folder")
+        if not gt_folder or not os.path.isdir(gt_folder):
+            return {
+                "PQ": float("nan"),
+                "note": f"Need valid gt_folder for pq_compute (got {gt_folder!r})",
+            }
+
         pred_folder = kwargs.get("pred_folder")
-        if not gt_folder or not pred_folder:
-            return {"PQ": float("nan"), "note": "Need gt_folder and pred_folder for pq_compute"}
-        results = pq_compute(ann_file, kwargs.get("pred_json"), gt_folder, pred_folder)
-        return {"PQ": float(results["All"]["pq"])}
+        pred_json = kwargs.get("pred_json")
+        work_dir = kwargs.get("work_dir")
+        if not pred_folder:
+            base = work_dir or os.path.join(os.path.dirname(ann_file), "_flexicm_panoptic_pred")
+            pred_folder = os.path.join(base, "panoptic_pred")
+        if not pred_json:
+            pred_json = os.path.join(
+                os.path.dirname(pred_folder.rstrip(os.sep)) or pred_folder,
+                "panoptic_pred.json",
+            )
+
+        # Always (re)export from in-memory predictions so PNG/JSON stay in sync.
+        pred_folder, pred_json, n_err = self._export_predictions(
+            predictions, ann_file, pred_folder, pred_json
+        )
+        print(f"[metric] wrote panoptic preds:\n  folder={pred_folder}\n  json={pred_json}")
+
+        # pq_compute requires a prediction for every GT image; if we only ran a
+        # subset (max_batches), evaluate against a filtered GT json.
+        pred_ids = set()
+        with open(pred_json) as f:
+            pred_data = json.load(f)
+        for ann in pred_data.get("annotations", []):
+            pred_ids.add(int(ann["image_id"]))
+        if not pred_ids:
+            return {
+                "PQ": float("nan"),
+                "note": "No valid panoptic predictions to evaluate",
+                "num_image_errors": n_err,
+                "pred_folder": pred_folder,
+                "pred_json": pred_json,
+            }
+
+        with open(ann_file) as f:
+            gt_data = json.load(f)
+        gt_ids = {int(a["image_id"]) for a in gt_data.get("annotations", [])}
+        eval_ann_file = ann_file
+        if pred_ids != gt_ids:
+            filtered = dict(gt_data)
+            filtered["annotations"] = [
+                a for a in gt_data["annotations"] if int(a["image_id"]) in pred_ids
+            ]
+            filtered["images"] = [
+                im for im in gt_data.get("images", []) if int(im["id"]) in pred_ids
+            ]
+            eval_ann_file = pred_json.replace(".json", "_gt_subset.json")
+            with open(eval_ann_file, "w") as f:
+                json.dump(filtered, f)
+            print(
+                f"[metric] subset PQ: {len(pred_ids)}/{len(gt_ids)} images "
+                f"(filtered GT -> {eval_ann_file})"
+            )
+
+        results = pq_compute(eval_ann_file, pred_json, gt_folder, pred_folder)
+        out = {
+            "PQ": float(results["All"]["pq"]) * 100.0,  # report as percent
+            "SQ": float(results["All"]["sq"]) * 100.0,
+            "RQ": float(results["All"]["rq"]) * 100.0,
+            "PQ_th": float(results["Things"]["pq"]) * 100.0,
+            "PQ_st": float(results["Stuff"]["pq"]) * 100.0,
+            "num_images": len(pred_ids),
+            "pred_folder": pred_folder,
+            "pred_json": pred_json,
+        }
+        if n_err:
+            out["num_image_errors"] = n_err
+        return out
+
 
 
 class PoseMetricRunner(TaskMetricRunner):

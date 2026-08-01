@@ -241,12 +241,20 @@ def main(argv):
 
         metric_loader, ann_file = build_metric_loader(args, device)
         print(f"[metric] COCO eval images: {len(metric_loader.dataset)}  ann={ann_file}")
+        out_dir = getattr(args, "result_dir", None) or os.path.join(
+            REPO_ROOT, "logs", "eval_taic", task, str(getattr(args, "quality_level", 1))
+        )
+        os.makedirs(out_dir, exist_ok=True)
         finalize_kwargs = enrich_panoptic_finalize_kwargs(
             task,
             ann_file,
             {
                 "gt_folder": getattr(args, "panoptic_gt_folder", None),
-                "pred_folder": getattr(args, "panoptic_pred_folder", None),
+                "pred_folder": getattr(args, "panoptic_pred_folder", None)
+                or os.path.join(out_dir, "panoptic_pred"),
+                "pred_json": getattr(args, "panoptic_pred_json", None)
+                or os.path.join(out_dir, "panoptic_pred.json"),
+                "work_dir": out_dir,
                 "num_classes": getattr(args, "num_classes", 133),
                 "eval_classes_file": getattr(args, "semantic_eval_classes", None),
             },

@@ -32,6 +32,8 @@ def _pre_set_cuda_visible_devices(argv):
         cfg = yaml.safe_load(f) or {}
     gpu_id = cfg.get("gpu_id", 0)
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    # Must be set before the first CuBLAS call when using deterministic algorithms.
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     return cfg_path, gpu_id
 
 
