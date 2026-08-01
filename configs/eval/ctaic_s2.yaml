@@ -2,7 +2,7 @@
 #   extension: ./checkpoints/ctaic/s2_sem_panoptic/stage2/{quality_level}/checkpoint_best_loss.pth.tar
 #   base TAIC: ./checkpoints/taic/semantic/{quality_level}/checkpoint_best_loss.pth.tar
 scenario: "s2"
-dataset_path: "/media/tianma/datasets/coco2017"
+dataset_path: "/home/zbellay/hdd2/Tianma/dataset/coco2017"
 split: "val2017"
 ann_file: "annotations/panoptic_val2017.json"
 quality_level: 1

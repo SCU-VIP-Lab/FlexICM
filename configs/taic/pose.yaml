@@ -1,7 +1,7 @@
 root: "logs"
 exp_name: "taic_pose"
 task: "pose"
-dataset_path: "/media/tianma/datasets/coco2017"
+dataset_path: "/home/zbellay/hdd2/Tianma/dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_4.pth.tar"
 freeze_base_codec: false
 checkpoint: null # "/media/tianma/FlexICM/logs/taic_pose/4/checkpoint_best_loss.pth.tar"

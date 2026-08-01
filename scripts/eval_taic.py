@@ -13,12 +13,30 @@ import os
 import sys
 from datetime import datetime
 
-import torch
-from torch.utils.data import DataLoader
+import yaml
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+
+
+def _pre_set_cuda_visible_devices(argv):
+    """Must run before importing torch, otherwise gpu_id is ignored."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-c", "--config", required=True)
+    given, _ = parser.parse_known_args(argv)
+    cfg_path = given.config if os.path.isabs(given.config) else os.path.join(REPO_ROOT, given.config)
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    gpu_id = cfg.get("gpu_id", 0)
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    return cfg_path, gpu_id
+
+
+_CFG_PATH, _PHYSICAL_GPU_ID = _pre_set_cuda_visible_devices(sys.argv[1:])
+
+import torch
+from torch.utils.data import DataLoader
 
 from flexicm.data import (
     COCOImageDataset,
@@ -154,8 +172,13 @@ def main(argv):
     args = parse_args(argv)
     set_seed(getattr(args, "seed", 42))
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(getattr(args, "gpu_id", 0))
+    # CUDA_VISIBLE_DEVICES already set before importing torch.
     device = "cuda" if getattr(args, "cuda", True) and torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        print(
+            f"Using physical GPU {getattr(args, 'gpu_id', _PHYSICAL_GPU_ID)} "
+            f"(visible as cuda:0, name={torch.cuda.get_device_name(0)})"
+        )
 
     task = args.task
     meta = TASK_META[task]
@@ -227,6 +250,12 @@ def main(argv):
     elif "bpp" in codec_result:
         payload["bpp"] = codec_result["bpp"]
 
+    # Resolve result dir early so panoptic PQ can dump pred PNG/JSON here.
+    out_dir = getattr(args, "result_dir", None) or os.path.join(
+        REPO_ROOT, "logs", "eval_taic", task, str(getattr(args, "quality_level", 1))
+    )
+    os.makedirs(out_dir, exist_ok=True)
+
     # ---- optional task metrics ----
     if with_metrics:
         task_cfg = getattr(args, "task_config", None) or DEFAULT_TASK_NET_CONFIGS[task]
@@ -283,10 +312,6 @@ def main(argv):
         if task == "pose" and pose_ms_scales is not None:
             payload["pose_ms_scales"] = pose_ms_scales
 
-    out_dir = getattr(args, "result_dir", None) or os.path.join(
-        REPO_ROOT, "logs", "eval_taic", task, str(getattr(args, "quality_level", 1))
-    )
-    os.makedirs(out_dir, exist_ok=True)
     out_json = os.path.join(out_dir, f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
     with open(out_json, "w") as f:
         json.dump(payload, f, indent=2, default=str)

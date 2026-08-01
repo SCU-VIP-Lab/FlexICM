@@ -2,21 +2,21 @@
 root: "logs"
 exp_name: "taic_detection"
 task: "detection"
-dataset_path: "/media/tianma/datasets/coco2017"
+dataset_path: "/home/zbellay/hdd2/Tianma/dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"  # quality matches lmbda mapping
-checkpoint:  "/data/Dataset/FlexICM/logs/taic_detection/1/checkpoint_best_loss.pth.tar"
+checkpoint:  null #"/home/zbellay/hdd2/Tianma/FlexICM/logs/taic_detection/3/checkpoint_best_loss.pth.tar"
 freeze_base_codec: false  # false = fine-tune the entire TIC + SFMA + Task Connector
-epochs: 999
-learning_rate: 1.0e-4
+epochs: 6
+learning_rate: 3.0e-5
 gpu_id: 0
-quality_level: 1
+quality_level: 4
 # paper lambda set: {0.0035, 0.0067, 0.0130, 0.0250, 0.2050}
-lmbda: 0.2050
-num_workers: 8
-batch_size: 2
+lmbda: 0.3000
+num_workers: 3
+batch_size: 3
 test_batch_size: 1
-patch_size: 800  # short edge; alias of short_edge
-max_long_side: 1333  # MMDet keep-ratio cap
+patch_size: 512  # short edge; alias of short_edge
+max_long_side: 640  # MMDet keep-ratio cap
 # batch_size may need lowering vs 256-crop training
 cuda: true
 save: true

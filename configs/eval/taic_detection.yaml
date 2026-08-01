@@ -2,16 +2,16 @@
 # Checkpoint path is derived from quality_level:
 #   ./checkpoints/taic/{task}/{quality_level}/checkpoint_best_loss.pth.tar
 task: "detection"
-dataset_path: "/media/tianma/datasets/coco2017"
+dataset_path: "/home/zbellay/hdd2/Tianma/dataset/coco2017"
 split: "val2017"
 ann_file: "annotations/instances_val2017.json"
-quality_level: 1
+quality_level: 4
 lmbda: 0.0035
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 # Task-aligned keep-ratio geom (see align_to_task). Legacy square: eval_size: 256
 # eval_size: null
 # official task network (required for --with-metrics)
-gpu_id: 0
+gpu_id: 1
 cuda: true
 test_batch_size: 1
 num_workers: 4

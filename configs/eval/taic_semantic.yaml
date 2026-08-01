@@ -1,12 +1,11 @@
 # TAIC eval: codec test + optional --with-metrics
-# Checkpoint path is derived from quality_level:
-#   ./checkpoints/taic/{task}/{quality_level}/checkpoint_best_loss.pth.tar
 task: "semantic"
-dataset_path: "/media/tianma/datasets/coco2017"
+dataset_path: "/home/zbellay/hdd2/Tianma/dataset/coco2017"
 split: "val2017"
 ann_file: "annotations/panoptic_val2017.json"
 quality_level: 1
 lmbda: 0.0035
+checkpoint: "/home/zbellay/hdd2/Tianma/FlexICM/logs/taic_semantic/1/checkpoint_best_loss.pth.tar"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 align_to_task: true
 # ADE test geom: short 512 / long ≤2048

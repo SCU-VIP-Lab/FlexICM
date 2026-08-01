@@ -47,7 +47,7 @@ def main():
         "mask2former_swin-l-p4-w12-384-in21k_16xb1-lsj-100e_coco-panoptic_"
         "20220407_104949-82f8d28d.pth"
     )
-    root = "/media/tianma/datasets/coco2017"
+    root = "/home/zbellay/hdd2/Tianma/dataset/coco2017"
     ann = f"{root}/annotations/panoptic_val2017.json"
     gt_folder = f"{root}/annotations/panoptic_val2017"
     img_dir = f"{root}/val2017"

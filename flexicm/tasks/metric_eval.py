@@ -144,6 +144,10 @@ def run_task_metric_eval(
                 h = out["h"]
                 meta["pad_height"] = int(x.shape[-2])
                 meta["pad_width"] = int(x.shape[-1])
+                # Unpadded keep-ratio size (before ÷256 pad); Mask2Former fusion
+                # crops padding with img_shape then rescales to ori_shape.
+                meta["img_height"] = int(H)
+                meta["img_width"] = int(W)
                 # Keep the padded RGB tensor for task nets that need a stem
                 # (e.g. HRNet multi-branch pose) while still injecting codec h.
                 meta["image_tensor"] = x

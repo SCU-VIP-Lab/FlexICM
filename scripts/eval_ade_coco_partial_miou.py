@@ -35,7 +35,7 @@ def main():
         "upernet_swin_base_patch4_window7_512x512_160k_ade20k_pretrain_224x224_22K_"
         "20210526_211650-762e2178.pth"
     )
-    root = "/media/tianma/datasets/coco2017"
+    root = "/home/zbellay/hdd2/Tianma/dataset/coco2017"
     ann = f"{root}/annotations/panoptic_val2017.json"
     gt_folder = f"{root}/annotations/panoptic_val2017"
     img_dir = f"{root}/val2017"

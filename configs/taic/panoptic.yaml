@@ -1,19 +1,20 @@
 root: "logs"
 exp_name: "taic_panoptic"
 task: "panoptic"
-dataset_path: "/media/tianma/datasets/coco2017"
-base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
-checkpoint: null
-epochs: 35
+dataset_path: "/home/zbellay/hdd2/Tianma/dataset/coco2017"
+base_codec: "./checkpoints/base_codec/base_codec_4.pth.tar"
+freeze_base_codec: false  
+checkpoint: # "/home/zbellay/hdd2/Tianma/FlexICM/logs/taic_panoptic/1/checkpoint_best_loss.pth.tar"
+epochs: 999
 learning_rate: 1.0e-4
-gpu_id: 0
-quality_level: 1
-lmbda: 0.0035
-num_workers: 8
+gpu_id: 1
+quality_level: 4
+lmbda: 40.185
+num_workers: 2
 batch_size: 2
 test_batch_size: 1
-patch_size: 800
-max_long_side: 1333
+patch_size: 512
+max_long_side: 640
 cuda: true
 save: true
 seed: 42
@@ -24,5 +25,6 @@ align_mode: "stages"
 
 # Official task-network teacher (backbone/neck) for feature alignment D
 use_official_teacher: true
+teacher_backbone_only: true
 task_config: "./checkpoints/task_networks/panoptic/mask2former_swin-l-p4-w12-384-in21k_16xb1-lsj-100e_coco-panoptic.py"
 task_checkpoint: "./checkpoints/task_networks/panoptic/mask2former_swin-l-p4-w12-384-in21k_16xb1-lsj-100e_coco-panoptic_20220407_104949-82f8d28d.pth"

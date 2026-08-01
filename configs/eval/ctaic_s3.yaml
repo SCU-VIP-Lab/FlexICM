@@ -2,7 +2,7 @@
 #   extension: ./checkpoints/ctaic/s3_det_pose/stage2/{quality_level}/checkpoint_best_loss.pth.tar
 #   base TAIC: ./checkpoints/taic/detection/{quality_level}/checkpoint_best_loss.pth.tar
 scenario: "s3"
-dataset_path: "/media/tianma/datasets/coco2017"
+dataset_path: "/home/zbellay/hdd2/Tianma/dataset/coco2017"
 split: "val2017"
 ann_file: "annotations/coco_wholebody_val_v1.0.json"
 quality_level: 1
