@@ -313,11 +313,10 @@ def main(argv):
         if task == "pose" and pose_ms_scales is not None:
             payload["pose_ms_scales"] = pose_ms_scales
 
-    if task != "pose":
-        out_json = os.path.join(out_dir, f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-        with open(out_json, "w") as f:
-            json.dump(payload, f, indent=2, default=str)
-        print(f"Wrote {out_json}")
+    out_json = os.path.join(out_dir, f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    with open(out_json, "w") as f:
+        json.dump(payload, f, indent=2, default=str)
+    print(f"Wrote {out_json}")
     return 0
 
 
