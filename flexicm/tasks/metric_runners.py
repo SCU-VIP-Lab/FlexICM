@@ -606,7 +606,6 @@ class PanopticMetricRunner(TaskMetricRunner):
         "food-other-merged",
         "roof",
         "fruit",
-        "paper-merged",
         "wall-stone",
         "banner",
     )
