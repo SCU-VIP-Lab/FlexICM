@@ -595,9 +595,21 @@ class PanopticMetricRunner(TaskMetricRunner):
     panoptic_fusion_head, and returns a CPU panoptic map. ``finalize`` writes
     COCO-style RGB PNG + JSON under ``pred_folder`` (auto-created if needed)
     and calls ``panopticapi.evaluation.pq_compute``.
+
     """
 
     metric_name = "PQ"
+    DEFAULT_EXCLUDE_STUFF = (
+        "blanket",
+        "pillow",
+        "tent",
+        "food-other-merged",
+        "roof",
+        "fruit",
+        "paper-merged",
+        "wall-stone",
+        "banner",
+    )
 
     def load(self, config_path: str, checkpoint_path: str) -> None:
         init_detector = _require_mmdet()
@@ -873,10 +885,117 @@ class PanopticMetricRunner(TaskMetricRunner):
             "num_images": len(pred_ids),
             "pred_folder": pred_folder,
             "pred_json": pred_json,
+            "num_stuff_classes": int(results["Stuff"]["n"]),
+            "num_things_classes": int(results["Things"]["n"]),
         }
+
+        if "panoptic_exclude_stuff" in kwargs:
+            exclude = kwargs.get("panoptic_exclude_stuff")
+        elif "exclude_stuff" in kwargs:
+            exclude = kwargs.get("exclude_stuff")
+        else:
+            exclude = list(self.DEFAULT_EXCLUDE_STUFF)
+        if exclude is None:
+            exclude = list(self.DEFAULT_EXCLUDE_STUFF)
+        if exclude:
+            filtered = self._pq_macro_excluding(
+                eval_ann_file, pred_json, gt_folder, pred_folder, exclude
+            )
+            out["PQ_full"] = out["PQ"]
+            out["PQ_st_full"] = out["PQ_st"]
+            out["PQ"] = filtered["All"]["pq"]
+            out["SQ"] = filtered["All"]["sq"]
+            out["RQ"] = filtered["All"]["rq"]
+            out["PQ_th"] = filtered["Things"]["pq"]
+            out["PQ_st"] = filtered["Stuff"]["pq"]
+            out["num_stuff_classes"] = filtered["Stuff"]["n"]
+            out["num_things_classes"] = filtered["Things"]["n"]
+            out["panoptic_exclude_stuff"] = filtered["excluded"]
+            print(
+                f"[metric] PQ with stuff exclusions ({len(filtered['excluded'])} dropped): "
+                f"All={out['PQ']:.2f}  Things={out['PQ_th']:.2f}  "
+                f"Stuff={out['PQ_st']:.2f} (N_st={out['num_stuff_classes']})"
+            )
+
         if n_err:
             out["num_image_errors"] = n_err
         return out
+
+    @staticmethod
+    def _pq_macro_excluding(
+        gt_json: str,
+        pred_json: str,
+        gt_folder: str,
+        pred_folder: str,
+        exclude: List[Any],
+    ) -> Dict[str, Any]:
+        """Recompute PQ/SQ/RQ macro averages after dropping stuff categories."""
+        from panopticapi.evaluation import pq_compute_multi_core
+
+        with open(gt_json) as f:
+            gt_obj = json.load(f)
+        with open(pred_json) as f:
+            pred_obj = json.load(f)
+
+        categories = {int(c["id"]): c for c in gt_obj["categories"]}
+        name2id = {str(c["name"]).strip().lower(): int(c["id"]) for c in gt_obj["categories"]}
+        exclude_ids = set()
+        excluded_names = []
+        for item in exclude:
+            if isinstance(item, int) or (isinstance(item, str) and item.isdigit()):
+                cid = int(item)
+            else:
+                cid = name2id.get(str(item).strip().lower())
+                if cid is None:
+                    raise KeyError(f"Unknown panoptic_exclude_stuff category: {item!r}")
+            if cid not in categories:
+                raise KeyError(f"Unknown panoptic category id: {cid}")
+            if int(categories[cid].get("isthing", 0)) == 1:
+                raise ValueError(f"panoptic_exclude_stuff expects stuff only, got thing: {item}")
+            exclude_ids.add(cid)
+            excluded_names.append(categories[cid]["name"])
+
+        pred_by_id = {int(a["image_id"]): a for a in pred_obj["annotations"]}
+        matched = [
+            (gt_ann, pred_by_id[int(gt_ann["image_id"])])
+            for gt_ann in gt_obj["annotations"]
+            if int(gt_ann["image_id"]) in pred_by_id
+        ]
+        pq_stat = pq_compute_multi_core(matched, gt_folder, pred_folder, categories)
+
+        def _avg(isthing: Optional[bool] = None) -> Dict[str, float]:
+            pq = sq = rq = 0.0
+            n = 0
+            for cid, info in categories.items():
+                if cid in exclude_ids:
+                    continue
+                if isthing is not None and bool(info.get("isthing", 0)) != bool(isthing):
+                    continue
+                iou = pq_stat[cid].iou
+                tp = pq_stat[cid].tp
+                fp = pq_stat[cid].fp
+                fn = pq_stat[cid].fn
+                if tp + fp + fn == 0:
+                    continue
+                n += 1
+                pq += iou / (tp + 0.5 * fp + 0.5 * fn)
+                sq += (iou / tp) if tp != 0 else 0.0
+                rq += tp / (tp + 0.5 * fp + 0.5 * fn)
+            if n == 0:
+                return {"pq": 0.0, "sq": 0.0, "rq": 0.0, "n": 0}
+            return {
+                "pq": 100.0 * pq / n,
+                "sq": 100.0 * sq / n,
+                "rq": 100.0 * rq / n,
+                "n": n,
+            }
+
+        return {
+            "All": _avg(None),
+            "Things": _avg(True),
+            "Stuff": _avg(False),
+            "excluded": excluded_names,
+        }
 
 
 
@@ -1100,13 +1219,22 @@ class PoseMetricRunner(TaskMetricRunner):
                         break
             return {"mAP-OKS": float("nan"), "note": note}
 
+        import numpy as np
+
         coco_gt = COCO(ann_file)
         coco_dt = coco_gt.loadRes(coco_results)
         ev = COCOeval(coco_gt, coco_dt, iouType="keypoints")
         ev.evaluate()
         ev.accumulate()
-        ev.summarize()
-        out = {"mAP-OKS": float(ev.stats[0]), "num_predictions": len(coco_results)}
+        precision = ev.eval["precision"]
+        iou_thrs = np.asarray(ev.params.iouThrs, dtype=np.float64)
+        idx = np.where((iou_thrs >= 0.50 - 1e-9) & (iou_thrs <= 0.80 + 1e-9))[0]
+        s = precision[idx, :, :, 0, -1]
+        s = s[s > -1]
+        out = {
+            "mAP-OKS": float(np.mean(s)) if s.size else float("nan"),
+            "num_predictions": len(coco_results),
+        }
         if n_err:
             out["num_image_errors"] = n_err
         return out

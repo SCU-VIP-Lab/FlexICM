@@ -286,6 +286,7 @@ def main(argv):
                 "work_dir": out_dir,
                 "num_classes": getattr(args, "num_classes", 133),
                 "eval_classes_file": getattr(args, "semantic_eval_classes", None),
+                "panoptic_exclude_stuff": getattr(args, "panoptic_exclude_stuff", None),
             },
         )
         pose_ms_scales = getattr(args, "pose_ms_scales", None)
@@ -312,10 +313,11 @@ def main(argv):
         if task == "pose" and pose_ms_scales is not None:
             payload["pose_ms_scales"] = pose_ms_scales
 
-    out_json = os.path.join(out_dir, f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-    with open(out_json, "w") as f:
-        json.dump(payload, f, indent=2, default=str)
-    print(f"Wrote {out_json}")
+    if task != "pose":
+        out_json = os.path.join(out_dir, f"eval_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+        with open(out_json, "w") as f:
+            json.dump(payload, f, indent=2, default=str)
+        print(f"Wrote {out_json}")
     return 0
 
 

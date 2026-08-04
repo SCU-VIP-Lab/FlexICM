@@ -312,6 +312,7 @@ def main(argv):
                 "work_dir": out_dir,
                 "num_classes": getattr(args, "num_classes", 133),
                 "eval_classes_file": getattr(args, "semantic_eval_classes", None),
+                "panoptic_exclude_stuff": getattr(args, "panoptic_exclude_stuff", None),
             },
         )
         pose_ms_scales = getattr(args, "pose_ms_scales", None)
