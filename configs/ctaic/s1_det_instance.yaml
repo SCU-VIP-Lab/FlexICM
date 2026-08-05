@@ -1,14 +1,20 @@
 # Scenario s1: Object Detection (base) + Instance Segmentation (extension)
+# Stage1 = extension TAIC (taic_init); this config runs C-TAIC stage2.
 root: "logs"
 exp_name: "ctaic_s1"
 scenario: "s1"
+stage: 2
 dataset_path: "/home/zbellay/hdd2/Tianma/dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 # trained base-layer TAIC for detection (provides y_b_hat)
 base_taic_checkpoint: "./checkpoints/taic/detection/1/checkpoint_best_loss.pth.tar"
 # optional TAIC init for extension task
 taic_init: "./checkpoints/taic/instance/1/checkpoint_best_loss.pth.tar"
-stage1_checkpoint: "./checkpoints/ctaic/s1_det_instance/stage1/1/checkpoint_best_loss.pth.tar"
+# stage2 trainable scope (default = paper: only Prompt/Condition Generator)
+train_enhance_layer: false  # true: also train full enhance CTAIC
+train_base_layer: false     # true: jointly train base TAIC + enhance
+# optional legacy alias for taic_init
+# stage1_checkpoint: "./checkpoints/ctaic/s1_det_instance/stage1/1/checkpoint_best_loss.pth.tar"
 epochs: 40
 learning_rate: 1.0e-4
 gpu_id: 0

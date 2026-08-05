@@ -6,13 +6,16 @@ Scenarios (paper Sec.IV.A):
   s2: semantic (base)  -> panoptic (extension)
   s3: detection (base) -> pose (extension)
 
-Two-stage training (paper Sec.III.B.3):
-  stage1: TAIC mode for extension task (SFMA + Task Connector)
-  stage2: condition mode (Prompt Generator + Condition Generator), needs base y_b_hat
+Paper training:
+  stage1: extension-task TAIC (train via scripts/train_taic.py; loaded as taic_init)
+  stage2: C-TAIC condition mode (Prompt/Condition Generator), needs base y_b_hat
 
-Example:
-  python scripts/train_ctaic.py -c configs/ctaic/s1_det_instance.yaml --stage 1
-  python scripts/train_ctaic.py -c configs/ctaic/s1_det_instance.yaml --stage 2
+Stage-2 trainable switches (yaml):
+  train_enhance_layer: false  # also train full enhance CTAIC (not only generators)
+  train_base_layer: false     # jointly train base TAIC with enhance
+
+Example (configs default to stage 2):
+  python scripts/train_ctaic.py -c configs/ctaic/s1_det_instance.yaml
 """
 
 from __future__ import annotations
@@ -45,7 +48,6 @@ from flexicm.utils.alignment import Alignment
 from flexicm.utils.train_utils import (
     AverageMeter,
     CustomDataParallel,
-    adamw_trainable,
     exp_dir,
     load_checkpoint_dict,
     load_yaml_config,
@@ -64,24 +66,28 @@ SCENARIOS = {
 def parse_args(argv):
     parser = argparse.ArgumentParser("Train FlexICM C-TAIC")
     parser.add_argument("-c", "--config", required=True)
-    parser.add_argument("--stage", type=int, choices=[1, 2], default=1)
+    # default None so yaml `stage:` is honored unless CLI overrides
+    parser.add_argument("--stage", type=int, choices=[1, 2], default=None)
     parser.add_argument("--name", default=datetime.now().strftime("%Y-%m-%d_%H_%M_%S"))
     given, remaining = parser.parse_known_args(argv)
     cfg = load_yaml_config(given.config)
     # -c/--stage already consumed by the first parse; keep them for the second pass
-    parser.set_defaults(config=given.config, stage=given.stage, **cfg)
+    parser.set_defaults(config=given.config, **cfg)
     for action in parser._actions:
         if "--config" in action.option_strings:
             action.required = False
             break
     args = parser.parse_args(remaining)
     args.config = given.config
-    args.stage = given.stage
+    if given.stage is not None:
+        args.stage = given.stage
+    else:
+        args.stage = int(cfg.get("stage", 2))
     return args
 
 
-def build_base_codec(args, device):
-    """Frozen base-layer TAIC used to provide y_b_hat."""
+def build_base_codec(args, device, train_base_layer: bool = False):
+    """Base-layer TAIC used to provide y_b_hat (frozen unless train_base_layer)."""
     base_task = SCENARIOS[args.scenario]["base"]
     out_ch = TASK_META[base_task]["out_channels"]
     base = TAIC(N=128, M=192, out_channels=out_ch).to(device)
@@ -91,20 +97,46 @@ def build_base_codec(args, device):
     elif args.base_codec:
         state, _ = load_checkpoint_dict(args.base_codec, map_location=device)
         base.load_base_codec(state, strict=False)
-    base.eval()
     for p in base.parameters():
-        p.requires_grad = False
+        p.requires_grad = bool(train_base_layer)
+    if train_base_layer:
+        base.train()
+    else:
+        base.eval()
     return base
 
 
-@torch.no_grad()
-def encode_base_latent(base_model, images):
-    out = base_model(images)
+def encode_base_latent(base_model, images, train_base_layer: bool = False):
+    if train_base_layer:
+        out = base_model(images)
+    else:
+        with torch.no_grad():
+            out = base_model(images)
     return out["y_hat"]
 
 
-def train_one_epoch(stage, ext_model, base_model, teacher, loader, optimizer, criterion, device, log_every=50):
+def _count_trainable(module):
+    return sum(p.numel() for p in module.parameters() if p.requires_grad)
+
+
+def train_one_epoch(
+    stage,
+    ext_model,
+    base_model,
+    teacher,
+    loader,
+    optimizer,
+    criterion,
+    device,
+    train_base_layer: bool = False,
+    log_every=1000,
+):
     ext_model.train()
+    if base_model is not None:
+        if train_base_layer:
+            base_model.train()
+        else:
+            base_model.eval()
     teacher.eval()
     meters = {k: AverageMeter() for k in ("loss", "bpp", "distortion")}
     for i, images in enumerate(loader):
@@ -113,7 +145,7 @@ def train_one_epoch(stage, ext_model, base_model, teacher, loader, optimizer, cr
         if stage == 1:
             out = ext_model(images, y_b_hat=None, use_condition=False)
         else:
-            y_b = encode_base_latent(base_model, images)
+            y_b = encode_base_latent(base_model, images, train_base_layer=train_base_layer)
             out = ext_model(images, y_b_hat=y_b, use_condition=True)
         with torch.no_grad():
             gt = teacher.gt_features(images)
@@ -143,8 +175,11 @@ def validate(
     device,
     align_divisor=256,
     pad_mode: str = "corner",
+    train_base_layer: bool = False,
 ):
     ext_model.eval()
+    if base_model is not None:
+        base_model.eval()
     meters = {k: AverageMeter() for k in ("loss", "bpp", "distortion")}
     for images in loader:
         images = images.to(device)
@@ -160,7 +195,7 @@ def validate(
         if stage == 1:
             out = ext_model(x, use_condition=False)
         else:
-            y_b = encode_base_latent(base_model, x)
+            y_b = encode_base_latent(base_model, x, train_base_layer=False)
             out = ext_model(x, y_b_hat=y_b, use_condition=True)
         gt = teacher.gt_features(x)
         pred = teacher.pred_features(out["h"], images=x)
@@ -169,6 +204,8 @@ def validate(
         for k in meters:
             meters[k].update(stats[k].item())
     ext_model.train()
+    if base_model is not None and train_base_layer:
+        base_model.train()
     return {k: m.avg for k, m in meters.items()}
 
 
@@ -227,7 +264,21 @@ def main(argv):
     )
     val_pad_mode = "center" if ext_task == "pose" else "corner"
 
-    base_model = build_base_codec(args, device) if stage == 2 else None
+    train_enhance_layer = bool(getattr(args, "train_enhance_layer", False))
+    train_base_layer = bool(getattr(args, "train_base_layer", False))
+    if stage != 2 and (train_enhance_layer or train_base_layer):
+        logging.warning(
+            "train_enhance_layer / train_base_layer only apply to stage 2; ignoring for stage %s",
+            stage,
+        )
+        train_enhance_layer = False
+        train_base_layer = False
+
+    base_model = (
+        build_base_codec(args, device, train_base_layer=train_base_layer)
+        if stage == 2
+        else None
+    )
 
     net = CTAIC(N=128, M=192, out_channels=out_channels).to(device)
     if args.base_codec:
@@ -240,13 +291,13 @@ def main(argv):
             state, _ = load_checkpoint_dict(args.taic_init, map_location=device)
             net.load_taic_checkpoint(state)
     else:
-        # stage2: load stage1 C-TAIC / TAIC weights then freeze for generators
-        init_ck = args.stage1_checkpoint or args.taic_init
+        # stage2: load extension TAIC (paper stage1), then set trainable mask
+        init_ck = getattr(args, "stage1_checkpoint", None) or args.taic_init
         if not init_ck:
-            raise ValueError("stage2 requires --stage1_checkpoint or taic_init in config")
+            raise ValueError("stage2 requires taic_init (or stage1_checkpoint) in config")
         state, _ = load_checkpoint_dict(init_ck, map_location=device)
         net.load_taic_checkpoint(state)
-        net.freeze_for_stage2()
+        net.configure_stage2_trainable(train_enhance_layer=train_enhance_layer)
 
     teacher = build_teacher(
         ext_task,
@@ -261,39 +312,68 @@ def main(argv):
     if args.cuda and torch.cuda.device_count() > 1:
         net = CustomDataParallel(net)
 
-    optimizer = adamw_trainable(net, lr=args.learning_rate)
+    # Optimizer over enhance (+ optional base) trainable params
+    opt_params = [p for p in net.parameters() if p.requires_grad]
+    if base_model is not None and train_base_layer:
+        opt_params.extend(p for p in base_model.parameters() if p.requires_grad)
+    optimizer = torch.optim.AdamW(opt_params, lr=args.learning_rate, weight_decay=0.01)
+
     use_bpp_loss = bool(getattr(args, "use_bpp_loss", True))
     criterion = TAICCriterion(
         lmbda=args.lmbda, align_mode=align_mode, use_bpp_loss=use_bpp_loss
     )
-    logging.info(f"use_bpp_loss={use_bpp_loss}  (loss = {'R + λD' if use_bpp_loss else 'λD only'})")
+    logging.info(
+        "trainable: enhance_full=%s base=%s | enhance_params=%s base_params=%s | loss=%s",
+        train_enhance_layer,
+        train_base_layer,
+        _count_trainable(net),
+        _count_trainable(base_model) if base_model is not None else 0,
+        "R + λD" if use_bpp_loss else "λD only",
+    )
 
     best = float("inf")
     for epoch in range(args.epochs):
         logging.info(f"===== Stage {stage} Epoch {epoch}/{args.epochs} =====")
         train_stats = train_one_epoch(
-            stage, net, base_model, teacher, train_loader, optimizer, criterion, device
+            stage,
+            net,
+            base_model,
+            teacher,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            train_base_layer=train_base_layer,
         )
         val_stats = validate(
-            stage, net, base_model, teacher, val_loader, criterion, device, pad_mode=val_pad_mode
+            stage,
+            net,
+            base_model,
+            teacher,
+            val_loader,
+            criterion,
+            device,
+            pad_mode=val_pad_mode,
+            train_base_layer=train_base_layer,
         )
         logging.info(f"train={train_stats} val={val_stats}")
         is_best = val_stats["loss"] < best
         best = min(best, val_stats["loss"])
         if args.save:
-            save_checkpoint(
-                {
-                    "epoch": epoch,
-                    "stage": stage,
-                    "scenario": args.scenario,
-                    "state_dict": net.module.state_dict() if hasattr(net, "module") else net.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "loss": val_stats["loss"],
-                    "args": vars(args),
-                },
-                is_best,
-                out_dir,
-            )
+            ckpt = {
+                "epoch": epoch,
+                "stage": stage,
+                "scenario": args.scenario,
+                "state_dict": net.module.state_dict() if hasattr(net, "module") else net.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "loss": val_stats["loss"],
+                "args": vars(args),
+                "train_enhance_layer": train_enhance_layer,
+                "train_base_layer": train_base_layer,
+            }
+            if base_model is not None and train_base_layer:
+                ckpt["base_state_dict"] = base_model.state_dict()
+            save_checkpoint(ckpt, is_best, out_dir)
 
 
 if __name__ == "__main__":

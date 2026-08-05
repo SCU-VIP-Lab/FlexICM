@@ -2,11 +2,16 @@
 root: "logs"
 exp_name: "ctaic_s3"
 scenario: "s3"
+stage: 2
 dataset_path: "/home/zbellay/hdd2/Tianma/dataset/coco2017"
 base_codec: "./checkpoints/base_codec/base_codec_1.pth.tar"
 base_taic_checkpoint: "./checkpoints/taic/detection/1/checkpoint_best_loss.pth.tar"
 taic_init: "./checkpoints/taic/pose/1/checkpoint_best_loss.pth.tar"
-stage1_checkpoint: "./checkpoints/ctaic/s3_det_pose/stage1/1/checkpoint_best_loss.pth.tar"
+# stage2 trainable scope (default = paper: only Prompt/Condition Generator)
+train_enhance_layer: false  # true: also train full enhance CTAIC
+train_base_layer: false     # true: jointly train base TAIC + enhance
+# optional legacy alias for taic_init
+# stage1_checkpoint: "./checkpoints/ctaic/s3_det_pose/stage1/1/checkpoint_best_loss.pth.tar"
 epochs: 40
 learning_rate: 1.0e-4
 gpu_id: 0

@@ -82,8 +82,17 @@ class CTAIC(TAIC):
 
     def freeze_for_stage2(self):
         """Train Conditional Prompt Generator + Condition Generator only."""
+        self.configure_stage2_trainable(train_enhance_layer=False)
+
+    def configure_stage2_trainable(self, train_enhance_layer: bool = False):
+        """Stage-2 trainable mask.
+
+        Always train prompt_generator + condition_generator.
+        If train_enhance_layer, also train the full enhance CTAIC (TAIC trunk,
+        SFMA, Task Connector, etc.).
+        """
         for p in self.parameters():
-            p.requires_grad = False
+            p.requires_grad = bool(train_enhance_layer)
         for p in self.prompt_generator.parameters():
             p.requires_grad = True
         for p in self.condition_generator.parameters():
