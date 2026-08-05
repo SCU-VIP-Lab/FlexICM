@@ -27,12 +27,31 @@ import sys
 import time
 from datetime import datetime
 
-import torch
-from torch.utils.data import DataLoader
+import yaml
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
+
+
+def _pre_set_cuda_visible_devices(argv):
+    """Must run before importing torch, otherwise gpu_id is ignored."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-c", "--config", required=True)
+    given, _ = parser.parse_known_args(argv)
+    cfg_path = given.config if os.path.isabs(given.config) else os.path.join(REPO_ROOT, given.config)
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f) or {}
+    gpu_id = cfg.get("gpu_id", 0)
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    return cfg_path, gpu_id
+
+
+_CFG_PATH, _PHYSICAL_GPU_ID = _pre_set_cuda_visible_devices(sys.argv[1:])
+
+import torch
+from torch.utils.data import DataLoader
 
 from flexicm.data import (
     COCOImageDataset,
@@ -217,8 +236,12 @@ def main(argv):
     setup_logger(os.path.join(out_dir, time.strftime("%Y%m%d_%H%M%S") + ".log"))
     logging.info(f"Scenario {args.scenario}: {SCENARIOS[args.scenario]} stage={stage}")
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_id)
     device = "cuda" if args.cuda and torch.cuda.is_available() else "cpu"
+    if device == "cuda":
+        logging.info(
+            f"Using physical GPU {getattr(args, 'gpu_id', _PHYSICAL_GPU_ID)} "
+            f"(visible as cuda:0, name={torch.cuda.get_device_name(0)})"
+        )
 
     ext_task = SCENARIOS[args.scenario]["ext"]
     meta = TASK_META[ext_task]
